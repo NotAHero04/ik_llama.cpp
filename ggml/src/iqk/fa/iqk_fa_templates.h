@@ -127,7 +127,7 @@ struct F16 {
         return vcombine_f16(vcvt_f16_f32(val1), vcvt_f16_f32(val2));
     }
     static inline Data set1(float val) { return vdupq_n_f16(val); }
-    static inline Data mul(Data v1, Data v2) { return vmulq_f16(v1, v2); }
+    static inline Data mul(Data v1, Data v2) { return ggml_vmulq_f16(v1, v2); }
     static inline Data sub(Data v1, Data v2) { return vsubq_f16(v1, v2); }
     static inline void store(float * ptr, Data data) {
         vst1q_f32(ptr+0, vcvt_f32_f16(vget_low_f16(data)));
@@ -135,7 +135,7 @@ struct F16 {
     }
     static inline void store(float16_t * ptr, Data data) { vst1q_f16(ptr, data); }
     static inline void store(float * ptr, float32x4_t data) { vst1q_f32(ptr, data); }
-    static inline Data fmadd(Data prev, Data v1, Data v2) { return vfmaq_f16(prev, v1, v2); }
+    static inline Data fmadd(Data prev, Data v1, Data v2) { return ggml_vfmaq_f16(prev, v1, v2); }
     static inline float reduce_max(Data data) { return vmaxvq_f16(data); }
     static inline float reduce_add(Data data) {
         auto sum = vadd_f16(vget_low_f16(data), vget_high_f16(data));
@@ -147,10 +147,10 @@ struct F16 {
         auto val32 = vld1q_f32(ptr);
         return vcvt_f16_f32(val32);
     }
-    static inline Data fmadd_lane0(Data prev, Data v1, float16x4_t v2) { return vfmaq_lane_f16(prev, v1, v2, 0); }
-    static inline Data fmadd_lane1(Data prev, Data v1, float16x4_t v2) { return vfmaq_lane_f16(prev, v1, v2, 1); }
-    static inline Data fmadd_lane2(Data prev, Data v1, float16x4_t v2) { return vfmaq_lane_f16(prev, v1, v2, 2); }
-    static inline Data fmadd_lane3(Data prev, Data v1, float16x4_t v2) { return vfmaq_lane_f16(prev, v1, v2, 3); }
+    static inline Data fmadd_lane0(Data prev, Data v1, float16x4_t v2) { return ggml_vfmaq_lane_f16(prev, v1, v2, 0); }
+    static inline Data fmadd_lane1(Data prev, Data v1, float16x4_t v2) { return ggml_vfmaq_lane_f16(prev, v1, v2, 1); }
+    static inline Data fmadd_lane2(Data prev, Data v1, float16x4_t v2) { return ggml_vfmaq_lane_f16(prev, v1, v2, 2); }
+    static inline Data fmadd_lane3(Data prev, Data v1, float16x4_t v2) { return ggml_vfmaq_lane_f16(prev, v1, v2, 3); }
 #endif
     template <int k_step> static inline float reduce_max(const Data * data) {
         return reduce_T<k_step, &F16::max, &F16::reduce_max>(data);
@@ -208,8 +208,8 @@ struct HelperQ8KV final : public BaseHelper {
 #ifdef __aarch64__
         auto vd = F16::set1(q8->d);
         auto qs = vld1_s8_x2(q8->qs + 8*i);
-        v1 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(qs.val[0])));
-        v2 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(qs.val[1])));
+        v1 = ggml_vmulq_f16(vd, ggml_vcvtq_f16_s16(vmovl_s8(qs.val[0])));
+        v2 = ggml_vmulq_f16(vd, ggml_vcvtq_f16_s16(vmovl_s8(qs.val[1])));
 #else
         auto vd = F16::set1(q8->d);
 #ifdef __AVX512F__
@@ -243,8 +243,8 @@ struct HelperQ80 final : public BaseHelper {
         auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d));
         int ii = j%QK8_0;
         auto qs = vld1_s8_x2(dl->qs + ii);
-        v1 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(qs.val[0])));
-        v2 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(qs.val[1])));
+        v1 = ggml_vmulq_f16(vd, ggml_vcvtq_f16_s16(vmovl_s8(qs.val[0])));
+        v2 = ggml_vmulq_f16(vd, ggml_vcvtq_f16_s16(vmovl_s8(qs.val[1])));
 #else
         auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d));
 #ifdef __AVX512F__
@@ -535,8 +535,8 @@ struct HelperQ40 final : public BaseHelper {
         auto q  = vld1q_u8(dl->qs);
         q = j%QK4_0 ? vshrq_n_u8(q, 4) : vandq_u8(q, mask);
         q = vaddq_s8(q, m8);
-        v1 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_low_s8(q))));
-        v2 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_high_s8(q))));
+        v1 = ggml_vmulq_f16(vd, ggml_vcvtq_f16_s16(vmovl_s8(vget_low_s8(q))));
+        v2 = ggml_vmulq_f16(vd, ggml_vcvtq_f16_s16(vmovl_s8(vget_high_s8(q))));
 #else
         auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d));
         auto q  = _mm_loadu_si128((const __m128i *)dl->qs);
@@ -579,8 +579,8 @@ struct HelperQ41 final : public BaseHelper {
         auto vm = F16::set1(*(const float16_t *)&dl->m);
         auto q  = vld1q_u8(dl->qs);
         q = (j%QK4_1) ? vshrq_n_u8(q, 4) : vandq_u8(q, mask);
-        v1 = vfmaq_f16(vm, vd, vcvtq_f16_u16(vmovl_u8(vget_low_u8(q))));
-        v2 = vfmaq_f16(vm, vd, vcvtq_f16_u16(vmovl_u8(vget_high_u8(q))));
+        v1 = ggml_vfmaq_f16(vm, vd, vcvtq_f16_u16(vmovl_u8(vget_low_u8(q))));
+        v2 = ggml_vfmaq_f16(vm, vd, vcvtq_f16_u16(vmovl_u8(vget_high_u8(q))));
 #else
         auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d));
         auto vm = F16::set1(GGML_FP16_TO_FP32(dl->m));
@@ -633,8 +633,8 @@ struct HelperIQ4nl final : public BaseHelper {
         auto q  = vld1q_u8(dl->qs);
         q = j%QK4_0 ? vshrq_n_u8(q, 4) : vandq_u8(q, mask);
         q = vqtbl1q_s8(values, q);
-        v1 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_low_s8(q))));
-        v2 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_high_s8(q))));
+        v1 = ggml_vmulq_f16(vd, ggml_vcvtq_f16_s16(vmovl_s8(vget_low_s8(q))));
+        v2 = ggml_vmulq_f16(vd, ggml_vcvtq_f16_s16(vmovl_s8(vget_high_s8(q))));
 #else
         auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d));
         auto q  = _mm_loadu_si128((const __m128i *)dl->qs);
@@ -688,8 +688,8 @@ struct HelperQ60 final : public BaseHelper {
         qs = j%QK4_0 ? vshrq_n_u8(qs, 4) : vandq_u8(qs, mask_l);
         qs = vorrq_u8(qs, vandq_u8(mask_h, j%QK4_0 ? vshrq_n_u8(qh, 2) : qh));
         qs = vaddq_s8(qs, m32);
-        v1 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_low_s8(qs))));
-        v2 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_high_s8(qs))));
+        v1 = ggml_vmulq_f16(vd, ggml_vcvtq_f16_s16(vmovl_s8(vget_low_s8(qs))));
+        v2 = ggml_vmulq_f16(vd, ggml_vcvtq_f16_s16(vmovl_s8(vget_high_s8(qs))));
 #else
         auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d));
         auto bl = _mm_loadu_si128((const __m128i *)dl->qs);
@@ -834,7 +834,7 @@ struct FlashMS {
         auto vzero = vdupq_n_f16(0);
         auto vinf  = vdupq_n_f32(-INFINITY);
         for (int l = 0; l < k_step/8; ++l) {
-            auto vm = vceqq_f16(vzero, vld1q_f16((const float16_t *)mask + 8*l));
+            auto vm = ggml_vceqq_f16(vzero, vld1q_f16((const float16_t *)mask + 8*l));
             auto vm1 = vzip1q_u16(vm, vm);
             auto vm2 = vzip2q_u16(vm, vm);
             auto kq  = vld1q_f32_x2(cache + k_step*j + 8*l);

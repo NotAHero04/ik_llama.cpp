@@ -639,22 +639,22 @@ struct QF16Base {
     static inline Data load(const __fp16 * x) { return vld1q_f16(x); }
     static inline Data load4(const __fp16 * x) { return vcombine_f16(vld1_f16(x), vdup_n_f16(0)); }
     static inline Acc acc(Acc prev, const Data& y, const Data& x) {
-        return vfmaq_f16(prev, y, x);
+        return ggml_vfmaq_f16(prev, y, x);
     }
     static inline Acc acc_first(const Data& y, const Data& x) {
-        return vmulq_f16(y, x);
+        return ggml_vmulq_f16(y, x);
     }
     //constexpr static int k_step = 16;
     //using Data = float16x8x2_t;
     //static inline Data load(const __fp16 * x) { return vld1q_f16_x2(x); }
     //static inline Acc acc(Acc prev, const Data& y, const Data& x) {
-    //    return vfmaq_f16(vfmaq_f16(prev, y.val[0], x.val[0]), y.val[1], x.val[1]);
+    //    return ggml_vfmaq_f16(ggml_vfmaq_f16(prev, y.val[0], x.val[0]), y.val[1], x.val[1]);
     //}
     //static inline Acc acc_first(const Data& y, const Data& x) {
-    //    return vfmaq_f16(vmulq_f16(y.val[0], x.val[0]), y.val[1], x.val[1]);
+    //    return ggml_vfmaq_f16(ggml_vmulq_f16(y.val[0], x.val[0]), y.val[1], x.val[1]);
     //}
     static inline float hsum(Acc acc) {
-        float32x4_t sum = vcvt_f32_f16(vadd_f16(vget_low_f16(acc), vget_high_f16(acc)));
+        float32x4_t sum = vcvt_f32_f16(ggml_vadd_f16(vget_low_f16(acc), vget_high_f16(acc)));
         return vaddvq_f32(sum);
     }
 };
@@ -924,9 +924,9 @@ IQK_NOINLINE void mul_mat_f16_f16_Nx1(int n, const char * cx, size_t bx, int ix0
         }
     }
     for (int ix = 0; ix < nrc_x; ++ix) {
-        auto v1 = vaddq_f16(acc[4*ix+0], acc[4*ix+1]);
-        auto v2 = vaddq_f16(acc[4*ix+2], acc[4*ix+3]);
-        info.store(ix0+ix, 0, QF16Base::hsum(vaddq_f16(v1, v2)));
+        auto v1 = ggml_vaddq_f16(acc[4*ix+0], acc[4*ix+1]);
+        auto v2 = ggml_vaddq_f16(acc[4*ix+2], acc[4*ix+3]);
+        info.store(ix0+ix, 0, QF16Base::hsum(ggml_vaddq_f16(v1, v2)));
     }
 }
 

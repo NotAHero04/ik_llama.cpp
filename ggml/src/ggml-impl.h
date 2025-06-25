@@ -394,6 +394,7 @@ inline static uint8x16_t ggml_vqtbl1q_u8(uint8x16_t a, uint8x16_t b) {
 
 #endif // !defined(__aarch64__)
 
+/*
 #if !defined(__ARM_FEATURE_DOTPROD)
 
 inline static int32x4_t ggml_vdotq_s32(int32x4_t acc, int8x16_t a, int8x16_t b) {
@@ -408,6 +409,7 @@ inline static int32x4_t ggml_vdotq_s32(int32x4_t acc, int8x16_t a, int8x16_t b) 
 #define ggml_vdotq_s32(a, b, c) vdotq_s32(a, b, c)
 
 #endif // !defined(__ARM_FEATURE_DOTPROD)
+*/
 
 #endif // defined(__ARM_NEON)
 

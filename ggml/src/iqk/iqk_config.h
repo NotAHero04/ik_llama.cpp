@@ -6,11 +6,7 @@
 
 #pragma once
 
-#if defined IQK_IMPLEMENT
-#undef IQK_IMPLEMENT
-#endif
-
-#if defined __AVX2__ || defined __ARM_FEATURE_DOTPROD
+#ifndef IQK_IMPLEMENT
 #define IQK_IMPLEMENT
 #endif
 
@@ -48,3 +44,4 @@
 #endif
 #endif
 
+#include "iqk_arm_compat.h"

@@ -2021,7 +2021,7 @@ template <int nrc> struct Q80 {
         auto qx_scales = deq.new_block(i);
         for (int iy = 0; iy < nrc; ++iy) {
             auto q8_scales = load_scales(iy, i);
-            sc16[iy] = vmul_f16(qx_scales, q8_scales);
+            sc16[iy] = ggml_vmul_f16(qx_scales, q8_scales);
         }
     }
 
@@ -2031,8 +2031,8 @@ template <int nrc> struct Q80 {
         auto qx_scales_2 = deq2.new_block(i);
         for (int iy = 0; iy < nrc; ++iy) {
             auto q8_scales = load_scales(iy, i);
-            sc16[iy      ] = vmul_f16(qx_scales_1, q8_scales);
-            sc16[iy+nrc_y] = vmul_f16(qx_scales_2, q8_scales);
+            sc16[iy      ] = ggml_vmul_f16(qx_scales_1, q8_scales);
+            sc16[iy+nrc_y] = ggml_vmul_f16(qx_scales_2, q8_scales);
         }
     }
 
@@ -2073,9 +2073,9 @@ template <int nrc> struct Q81 {
         auto qx_scales = deq.new_block(i);
         for (int iy = 0; iy < nrc; ++iy) {
             auto q8_scales = load_scales(iy, i);
-            auto m = vmul_f16(vget_high_f16(qx_scales), vget_high_f16(q8_scales));
+            auto m = ggml_vmul_f16(vget_high_f16(qx_scales), vget_high_f16(q8_scales));
             acc[iy] = vaddq_f32(acc[iy], vcvt_f32_f16(m));
-            sc16[iy] = vmul_f16(vget_low_f16(qx_scales), vget_low_f16(q8_scales));
+            sc16[iy] = ggml_vmul_f16(vget_low_f16(qx_scales), vget_low_f16(q8_scales));
         }
     }
 
@@ -2087,12 +2087,12 @@ template <int nrc> struct Q81 {
             auto q8_scales = load_scales(iy, i);
             auto q8_scales_l = vget_low_f16(q8_scales);
             auto q8_scales_h = vget_high_f16(q8_scales);
-            auto m1 = vmul_f16(vget_high_f16(qx_scales_1), q8_scales_h);
-            auto m2 = vmul_f16(vget_high_f16(qx_scales_2), q8_scales_h);
+            auto m1 = ggml_vmul_f16(vget_high_f16(qx_scales_1), q8_scales_h);
+            auto m2 = ggml_vmul_f16(vget_high_f16(qx_scales_2), q8_scales_h);
             acc[iy       ] = vaddq_f32(acc[iy      ], vcvt_f32_f16(m1));
             acc[iy+nrc_y ] = vaddq_f32(acc[iy+nrc_y], vcvt_f32_f16(m2));
-            sc16[iy      ] = vmul_f16(vget_low_f16(qx_scales_1), q8_scales_l);
-            sc16[iy+nrc_y] = vmul_f16(vget_low_f16(qx_scales_2), q8_scales_l);
+            sc16[iy      ] = ggml_vmul_f16(vget_low_f16(qx_scales_1), q8_scales_l);
+            sc16[iy+nrc_y] = ggml_vmul_f16(vget_low_f16(qx_scales_2), q8_scales_l);
         }
     }
 
@@ -2714,22 +2714,22 @@ struct Q6_0_R4_Dequantizer {
 inline void qx_0_q8_0_dot(const int8x16_t * qx, const int8_t * qy, int32x4_t& sumi1, int32x4_t& sumi2) {
     auto y = vld1q_s8_x2(qy);
     sumi1 = sumi2 = vdupq_n_s32(0);
-    sumi1 = vdotq_laneq_s32(sumi1, qx[0], y.val[0], 0);
-    sumi2 = vdotq_laneq_s32(sumi2, qx[1], y.val[0], 0);
-    sumi1 = vdotq_laneq_s32(sumi1, qx[2], y.val[0], 1);
-    sumi2 = vdotq_laneq_s32(sumi2, qx[3], y.val[0], 1);
-    sumi1 = vdotq_laneq_s32(sumi1, qx[4], y.val[0], 2);
-    sumi2 = vdotq_laneq_s32(sumi2, qx[5], y.val[0], 2);
-    sumi1 = vdotq_laneq_s32(sumi1, qx[6], y.val[0], 3);
-    sumi2 = vdotq_laneq_s32(sumi2, qx[7], y.val[0], 3);
-    sumi1 = vdotq_laneq_s32(sumi1, qx[8+0], y.val[1], 0);
-    sumi2 = vdotq_laneq_s32(sumi2, qx[8+1], y.val[1], 0);
-    sumi1 = vdotq_laneq_s32(sumi1, qx[8+2], y.val[1], 1);
-    sumi2 = vdotq_laneq_s32(sumi2, qx[8+3], y.val[1], 1);
-    sumi1 = vdotq_laneq_s32(sumi1, qx[8+4], y.val[1], 2);
-    sumi2 = vdotq_laneq_s32(sumi2, qx[8+5], y.val[1], 2);
-    sumi1 = vdotq_laneq_s32(sumi1, qx[8+6], y.val[1], 3);
-    sumi2 = vdotq_laneq_s32(sumi2, qx[8+7], y.val[1], 3);
+    sumi1 = ggml_vdotq_laneq_s32(sumi1, qx[0], y.val[0], 0);
+    sumi2 = ggml_vdotq_laneq_s32(sumi2, qx[1], y.val[0], 0);
+    sumi1 = ggml_vdotq_laneq_s32(sumi1, qx[2], y.val[0], 1);
+    sumi2 = ggml_vdotq_laneq_s32(sumi2, qx[3], y.val[0], 1);
+    sumi1 = ggml_vdotq_laneq_s32(sumi1, qx[4], y.val[0], 2);
+    sumi2 = ggml_vdotq_laneq_s32(sumi2, qx[5], y.val[0], 2);
+    sumi1 = ggml_vdotq_laneq_s32(sumi1, qx[6], y.val[0], 3);
+    sumi2 = ggml_vdotq_laneq_s32(sumi2, qx[7], y.val[0], 3);
+    sumi1 = ggml_vdotq_laneq_s32(sumi1, qx[8+0], y.val[1], 0);
+    sumi2 = ggml_vdotq_laneq_s32(sumi2, qx[8+1], y.val[1], 0);
+    sumi1 = ggml_vdotq_laneq_s32(sumi1, qx[8+2], y.val[1], 1);
+    sumi2 = ggml_vdotq_laneq_s32(sumi2, qx[8+3], y.val[1], 1);
+    sumi1 = ggml_vdotq_laneq_s32(sumi1, qx[8+4], y.val[1], 2);
+    sumi2 = ggml_vdotq_laneq_s32(sumi2, qx[8+5], y.val[1], 2);
+    sumi1 = ggml_vdotq_laneq_s32(sumi1, qx[8+6], y.val[1], 3);
+    sumi2 = ggml_vdotq_laneq_s32(sumi2, qx[8+7], y.val[1], 3);
 }
 
 template <int nrc_y>

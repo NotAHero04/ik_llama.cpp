@@ -804,36 +804,36 @@ static void mul_mat_qX_K_q8_K_T(int n, const void * vx, size_t bx, const DataInf
 
 static IQK_ALWAYS_INLINE int32x4_t interleaved_dotq(const int8x16_t * qx, const int8x16x2_t& y) {
     auto sumi = vdupq_n_s32(0);
-    sumi = vdotq_laneq_s32(sumi, qx[0], y.val[0], 0);
-    sumi = vdotq_laneq_s32(sumi, qx[1], y.val[1], 0);
-    sumi = vdotq_laneq_s32(sumi, qx[2], y.val[0], 1);
-    sumi = vdotq_laneq_s32(sumi, qx[3], y.val[1], 1);
-    sumi = vdotq_laneq_s32(sumi, qx[4], y.val[0], 2);
-    sumi = vdotq_laneq_s32(sumi, qx[5], y.val[1], 2);
-    sumi = vdotq_laneq_s32(sumi, qx[6], y.val[0], 3);
-    sumi = vdotq_laneq_s32(sumi, qx[7], y.val[1], 3);
+    sumi = ggml_vdotq_laneq_s32(sumi, qx[0], y.val[0], 0);
+    sumi = ggml_vdotq_laneq_s32(sumi, qx[1], y.val[1], 0);
+    sumi = ggml_vdotq_laneq_s32(sumi, qx[2], y.val[0], 1);
+    sumi = ggml_vdotq_laneq_s32(sumi, qx[3], y.val[1], 1);
+    sumi = ggml_vdotq_laneq_s32(sumi, qx[4], y.val[0], 2);
+    sumi = ggml_vdotq_laneq_s32(sumi, qx[5], y.val[1], 2);
+    sumi = ggml_vdotq_laneq_s32(sumi, qx[6], y.val[0], 3);
+    sumi = ggml_vdotq_laneq_s32(sumi, qx[7], y.val[1], 3);
     return sumi;
 }
 
 static IQK_ALWAYS_INLINE int32x4x2_t interleaved_dotq_b16(const int8x16_t * qx, const int8x16x2_t& y) {
     int32x4x2_t sumi = { vdupq_n_s32(0), vdupq_n_s32(0) };
-    sumi.val[0] = vdotq_laneq_s32(sumi.val[0], qx[0], y.val[0], 0);
-    sumi.val[1] = vdotq_laneq_s32(sumi.val[1], qx[1], y.val[1], 0);
-    sumi.val[0] = vdotq_laneq_s32(sumi.val[0], qx[2], y.val[0], 1);
-    sumi.val[1] = vdotq_laneq_s32(sumi.val[1], qx[3], y.val[1], 1);
-    sumi.val[0] = vdotq_laneq_s32(sumi.val[0], qx[4], y.val[0], 2);
-    sumi.val[1] = vdotq_laneq_s32(sumi.val[1], qx[5], y.val[1], 2);
-    sumi.val[0] = vdotq_laneq_s32(sumi.val[0], qx[6], y.val[0], 3);
-    sumi.val[1] = vdotq_laneq_s32(sumi.val[1], qx[7], y.val[1], 3);
+    sumi.val[0] = ggml_vdotq_laneq_s32(sumi.val[0], qx[0], y.val[0], 0);
+    sumi.val[1] = ggml_vdotq_laneq_s32(sumi.val[1], qx[1], y.val[1], 0);
+    sumi.val[0] = ggml_vdotq_laneq_s32(sumi.val[0], qx[2], y.val[0], 1);
+    sumi.val[1] = ggml_vdotq_laneq_s32(sumi.val[1], qx[3], y.val[1], 1);
+    sumi.val[0] = ggml_vdotq_laneq_s32(sumi.val[0], qx[4], y.val[0], 2);
+    sumi.val[1] = ggml_vdotq_laneq_s32(sumi.val[1], qx[5], y.val[1], 2);
+    sumi.val[0] = ggml_vdotq_laneq_s32(sumi.val[0], qx[6], y.val[0], 3);
+    sumi.val[1] = ggml_vdotq_laneq_s32(sumi.val[1], qx[7], y.val[1], 3);
     return sumi;
 }
 
 static IQK_ALWAYS_INLINE int32x4_t interleaved_dotq(const int8x16_t * qx, const int8x16_t& y) {
     auto sumi = vdupq_n_s32(0);
-    sumi = vdotq_laneq_s32(sumi, qx[0], y, 0);
-    sumi = vdotq_laneq_s32(sumi, qx[1], y, 1);
-    sumi = vdotq_laneq_s32(sumi, qx[2], y, 2);
-    sumi = vdotq_laneq_s32(sumi, qx[3], y, 3);
+    sumi = ggml_vdotq_laneq_s32(sumi, qx[0], y, 0);
+    sumi = ggml_vdotq_laneq_s32(sumi, qx[1], y, 1);
+    sumi = ggml_vdotq_laneq_s32(sumi, qx[2], y, 2);
+    sumi = ggml_vdotq_laneq_s32(sumi, qx[3], y, 3);
     return sumi;
 }
 

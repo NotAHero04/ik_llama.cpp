@@ -2075,10 +2075,10 @@ static IQK_NOINLINE void mul_mat_iq2_bn_r4_q8_k16(int n, const void * vx, size_t
                 for (int j = 0; j < 4; ++j) {
                     auto bits1 = vld1q_u8(iq2 + 64*ib + 16*j);
                     auto bits2 = vshrq_n_u8(bits1, 4);
-                    acc[2*j+0] = vdotq_laneq_s32(acc[2*j+0], vandq_u8(bits1, m3), y.val[j], 0);
-                    acc[2*j+1] = vdotq_laneq_s32(acc[2*j+1], vandq_u8(bits1, mc), y.val[j], 1);
-                    acc[2*j+0] = vdotq_laneq_s32(acc[2*j+0], vandq_u8(bits2, m3), y.val[j], 2);
-                    acc[2*j+1] = vdotq_laneq_s32(acc[2*j+1], vandq_u8(bits2, mc), y.val[j], 3);
+                    acc[2*j+0] = ggml_vdotq_laneq_s32(acc[2*j+0], vandq_u8(bits1, m3), y.val[j], 0);
+                    acc[2*j+1] = ggml_vdotq_laneq_s32(acc[2*j+1], vandq_u8(bits1, mc), y.val[j], 1);
+                    acc[2*j+0] = ggml_vdotq_laneq_s32(acc[2*j+0], vandq_u8(bits2, m3), y.val[j], 2);
+                    acc[2*j+1] = ggml_vdotq_laneq_s32(acc[2*j+1], vandq_u8(bits2, mc), y.val[j], 3);
                 }
             }
             auto dy = vmulq_f32(dl, vdupq_n_f32(q8.scale(0, 0)));
@@ -2116,14 +2116,14 @@ static IQK_NOINLINE void mul_mat_iq2_bn_r4_q8_k16(int n, const void * vx, size_t
                 qx[7] = vshrq_n_u8(bits.val[1], 6);
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = q8.load_quants_32(iy, 2*ib+0);
-                    acc[4*iy + 0] = vdotq_laneq_s32(acc[4*iy + 0], qx[0], y.val[0], 0);
-                    acc[4*iy + 0] = vdotq_laneq_s32(acc[4*iy + 0], qx[1], y.val[0], 1);
-                    acc[4*iy + 0] = vdotq_laneq_s32(acc[4*iy + 0], qx[2], y.val[0], 2);
-                    acc[4*iy + 0] = vdotq_laneq_s32(acc[4*iy + 0], qx[3], y.val[0], 3);
-                    acc[4*iy + 1] = vdotq_laneq_s32(acc[4*iy + 1], qx[4], y.val[1], 0);
-                    acc[4*iy + 1] = vdotq_laneq_s32(acc[4*iy + 1], qx[5], y.val[1], 1);
-                    acc[4*iy + 1] = vdotq_laneq_s32(acc[4*iy + 1], qx[6], y.val[1], 2);
-                    acc[4*iy + 1] = vdotq_laneq_s32(acc[4*iy + 1], qx[7], y.val[1], 3);
+                    acc[4*iy + 0] = ggml_vdotq_laneq_s32(acc[4*iy + 0], qx[0], y.val[0], 0);
+                    acc[4*iy + 0] = ggml_vdotq_laneq_s32(acc[4*iy + 0], qx[1], y.val[0], 1);
+                    acc[4*iy + 0] = ggml_vdotq_laneq_s32(acc[4*iy + 0], qx[2], y.val[0], 2);
+                    acc[4*iy + 0] = ggml_vdotq_laneq_s32(acc[4*iy + 0], qx[3], y.val[0], 3);
+                    acc[4*iy + 1] = ggml_vdotq_laneq_s32(acc[4*iy + 1], qx[4], y.val[1], 0);
+                    acc[4*iy + 1] = ggml_vdotq_laneq_s32(acc[4*iy + 1], qx[5], y.val[1], 1);
+                    acc[4*iy + 1] = ggml_vdotq_laneq_s32(acc[4*iy + 1], qx[6], y.val[1], 2);
+                    acc[4*iy + 1] = ggml_vdotq_laneq_s32(acc[4*iy + 1], qx[7], y.val[1], 3);
                 }
                 bits = vld1q_u8_x2(iq2 + 64*ib + 32);
                 qx[0] = vandq_u8(bits.val[0], m3);
@@ -2136,14 +2136,14 @@ static IQK_NOINLINE void mul_mat_iq2_bn_r4_q8_k16(int n, const void * vx, size_t
                 qx[7] = vshrq_n_u8(bits.val[1], 6);
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = q8.load_quants_32(iy, 2*ib+1);
-                    acc[4*iy + 2] = vdotq_laneq_s32(acc[4*iy + 2], qx[0], y.val[0], 0);
-                    acc[4*iy + 2] = vdotq_laneq_s32(acc[4*iy + 2], qx[1], y.val[0], 1);
-                    acc[4*iy + 2] = vdotq_laneq_s32(acc[4*iy + 2], qx[2], y.val[0], 2);
-                    acc[4*iy + 2] = vdotq_laneq_s32(acc[4*iy + 2], qx[3], y.val[0], 3);
-                    acc[4*iy + 3] = vdotq_laneq_s32(acc[4*iy + 3], qx[4], y.val[1], 0);
-                    acc[4*iy + 3] = vdotq_laneq_s32(acc[4*iy + 3], qx[5], y.val[1], 1);
-                    acc[4*iy + 3] = vdotq_laneq_s32(acc[4*iy + 3], qx[6], y.val[1], 2);
-                    acc[4*iy + 3] = vdotq_laneq_s32(acc[4*iy + 3], qx[7], y.val[1], 3);
+                    acc[4*iy + 2] = ggml_vdotq_laneq_s32(acc[4*iy + 2], qx[0], y.val[0], 0);
+                    acc[4*iy + 2] = ggml_vdotq_laneq_s32(acc[4*iy + 2], qx[1], y.val[0], 1);
+                    acc[4*iy + 2] = ggml_vdotq_laneq_s32(acc[4*iy + 2], qx[2], y.val[0], 2);
+                    acc[4*iy + 2] = ggml_vdotq_laneq_s32(acc[4*iy + 2], qx[3], y.val[0], 3);
+                    acc[4*iy + 3] = ggml_vdotq_laneq_s32(acc[4*iy + 3], qx[4], y.val[1], 0);
+                    acc[4*iy + 3] = ggml_vdotq_laneq_s32(acc[4*iy + 3], qx[5], y.val[1], 1);
+                    acc[4*iy + 3] = ggml_vdotq_laneq_s32(acc[4*iy + 3], qx[6], y.val[1], 2);
+                    acc[4*iy + 3] = ggml_vdotq_laneq_s32(acc[4*iy + 3], qx[7], y.val[1], 3);
                 }
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
@@ -2293,14 +2293,14 @@ static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataI
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = vld1q_s8_x2(q8.y[iy][ib].qs + 32*k);
                     auto sumi = vdupq_n_s32(0);
-                    sumi = vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[0]), y.val[0], 0);
-                    sumi = vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[1]), y.val[0], 1);
-                    sumi = vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[2]), y.val[0], 2);
-                    sumi = vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[3]), y.val[0], 3);
-                    sumi = vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[4]), y.val[1], 0);
-                    sumi = vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[5]), y.val[1], 1);
-                    sumi = vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[6]), y.val[1], 2);
-                    sumi = vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[7]), y.val[1], 3);
+                    sumi = ggml_vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[0]), y.val[0], 0);
+                    sumi = ggml_vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[1]), y.val[0], 1);
+                    sumi = ggml_vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[2]), y.val[0], 2);
+                    sumi = ggml_vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[3]), y.val[0], 3);
+                    sumi = ggml_vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[4]), y.val[1], 0);
+                    sumi = ggml_vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[5]), y.val[1], 1);
+                    sumi = ggml_vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[6]), y.val[1], 2);
+                    sumi = ggml_vdotq_laneq_s32(sumi, vreinterpretq_s8_u8(qx[7]), y.val[1], 3);
                     sumi = vmulq_s32(scales, sumi);
                     acc[iy] = vfmaq_f32(acc[iy], vdupq_n_f32(q8.y[iy][ib].d), vcvtq_f32_s32(sumi));
                     acc[iy] = vfmaq_f32(acc[iy], vdupq_n_f32(d8[4*iy+k]), delta4);
@@ -2369,14 +2369,14 @@ static void mul_mat_iq1_m_r4_q8_0(int n, const void * vx, size_t bx, const DataI
                     auto y = vld1q_s8_x2(q8.y[iy][ib].qs + 32*k);
                     auto sumi1 = vdupq_n_s32(0);
                     auto sumi2 = vdupq_n_s32(0);
-                    sumi1 = vdotq_laneq_s32(sumi1, vreinterpretq_s8_u8(qx[0]), y.val[0], 0);
-                    sumi1 = vdotq_laneq_s32(sumi1, vreinterpretq_s8_u8(qx[1]), y.val[0], 1);
-                    sumi1 = vdotq_laneq_s32(sumi1, vreinterpretq_s8_u8(qx[2]), y.val[0], 2);
-                    sumi1 = vdotq_laneq_s32(sumi1, vreinterpretq_s8_u8(qx[3]), y.val[0], 3);
-                    sumi2 = vdotq_laneq_s32(sumi2, vreinterpretq_s8_u8(qx[4]), y.val[1], 0);
-                    sumi2 = vdotq_laneq_s32(sumi2, vreinterpretq_s8_u8(qx[5]), y.val[1], 1);
-                    sumi2 = vdotq_laneq_s32(sumi2, vreinterpretq_s8_u8(qx[6]), y.val[1], 2);
-                    sumi2 = vdotq_laneq_s32(sumi2, vreinterpretq_s8_u8(qx[7]), y.val[1], 3);
+                    sumi1 = ggml_vdotq_laneq_s32(sumi1, vreinterpretq_s8_u8(qx[0]), y.val[0], 0);
+                    sumi1 = ggml_vdotq_laneq_s32(sumi1, vreinterpretq_s8_u8(qx[1]), y.val[0], 1);
+                    sumi1 = ggml_vdotq_laneq_s32(sumi1, vreinterpretq_s8_u8(qx[2]), y.val[0], 2);
+                    sumi1 = ggml_vdotq_laneq_s32(sumi1, vreinterpretq_s8_u8(qx[3]), y.val[0], 3);
+                    sumi2 = ggml_vdotq_laneq_s32(sumi2, vreinterpretq_s8_u8(qx[4]), y.val[1], 0);
+                    sumi2 = ggml_vdotq_laneq_s32(sumi2, vreinterpretq_s8_u8(qx[5]), y.val[1], 1);
+                    sumi2 = ggml_vdotq_laneq_s32(sumi2, vreinterpretq_s8_u8(qx[6]), y.val[1], 2);
+                    sumi2 = ggml_vdotq_laneq_s32(sumi2, vreinterpretq_s8_u8(qx[7]), y.val[1], 3);
                     isum[iy] = vmlaq_s32(vmlaq_s32(isum[iy], sumi1, scales1), sumi2, scales2);
                 }
             }
