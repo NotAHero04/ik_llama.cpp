@@ -607,6 +607,14 @@ typedef struct {
 static_assert(sizeof(block_iq2_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/32 + QK_K/4, "wrong iq2_k block size/padding");
 
 typedef struct {
+    uint16_t scales_h;
+    uint8_t  scales_l[QK_K/64];
+    uint8_t  qs[QK_K/4];
+    uint8_t  qh[QK_K/16];
+} block_iq2_kl;
+static_assert(sizeof(block_iq2_kl) == sizeof(uint16_t) + QK_K/64 + QK_K/4 + QK_K/16, "wrong iq2_kl block size/padding");
+
+typedef struct {
     ggml_half d[4];
     uint8_t  extra[8];
     uint8_t  scales[QK_K/8];
@@ -620,6 +628,13 @@ typedef struct {
     uint8_t  qs[QK_K/4];
 } block_iq2_ks;
 static_assert(sizeof(block_iq2_ks) == sizeof(uint16_t) + QK_K/64 + QK_K/4, "wrong iq2_ks block size/padding");
+
+typedef struct {
+    uint8_t  sh[QK_K/32]; // 4-bit scales + 13th bits for groups of 8
+    uint8_t  ql[QK_K/8];  //  low 8 bits for groups of 8
+    uint8_t  qh[QK_K/16]; // high 4 bits for groups of 8
+} block_iq1_kt;
+static_assert(sizeof(block_iq1_kt) == QK_K/8 + QK_K/16 + QK_K/32, "wrong iq1_kt block size/padding");
 
 typedef struct {
     uint8_t  scales[QK_K/64];
@@ -648,6 +663,14 @@ typedef struct {
     uint8_t qh[QK_K/8];
 } block_iq3_k;
 static_assert(sizeof(block_iq3_k) == sizeof(ggml_half) + 2*sizeof(uint16_t) + QK_K/32 + QK_K/4 + QK_K/8, "wrong iq3_k block size/padding");
+
+typedef struct {
+    uint16_t extra;
+    uint8_t scales[QK_K/64];
+    uint8_t qs[QK_K/4];
+    uint8_t qh[QK_K/8];
+} block_iq3_ks;
+static_assert(sizeof(block_iq3_ks) == sizeof(uint16_t) + QK_K/64 + QK_K/4 + QK_K/8, "wrong iq3_ks block size/padding");
 
 typedef struct {
     ggml_half d[4];
@@ -2155,6 +2178,12 @@ GGML_TABLE_END()
 GGML_TABLE_BEGIN(int8_t, iq2nl_values, 8)
     -31, -13, 1, 17,   -26, -8, 6, 22
 GGML_TABLE_END()
+
+GGML_TABLE_BEGIN(uint16_t, iq2kl_values, 32)
+    0xe9c1, 0x0dc1, 0xc1d8, 0xf6d8, 0x0dd8, 0x2fd8, 0xd8e9, 0xe9e9, 0x01e9, 0x0de9, 0x1ce9, 0xc1f6, 0x01f6, 0x0df6, 0x2ff6, 0xe901,
+    0xf601, 0x0101, 0x0d01, 0x1c01, 0xd80d, 0xe90d, 0xf60d, 0x010d, 0x0d0d, 0xc11c, 0xe91c, 0x011c, 0x1c1c, 0x2f1c, 0xe92f, 0x0d2f,
+GGML_TABLE_END()
+
 
 GGML_TABLE_BEGIN(int8_t, iq3nl_values, 16)
     -63, -40, -23, -10, 1, 13, 28,  47,

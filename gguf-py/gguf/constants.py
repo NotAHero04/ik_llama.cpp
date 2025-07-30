@@ -226,6 +226,7 @@ class MODEL_ARCH(IntEnum):
     T5           = auto()
     T5ENCODER    = auto()
     JAIS         = auto()
+    DOTS1        = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -362,6 +363,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.T5:             "t5",
     MODEL_ARCH.T5ENCODER:      "t5encoder",
     MODEL_ARCH.JAIS:           "jais",
+    MODEL_ARCH.DOTS1:          "dots1",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -1164,6 +1166,30 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_UP,
     ],
+    MODEL_ARCH.DOTS1: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+    ],
     # TODO
 }
 
@@ -1294,6 +1320,9 @@ class GGMLQuantizationType(IntEnum):
     IQ2_KT    = 153
     IQ3_KT    = 154
     IQ4_KT    = 155
+    IQ3_KS    = 156
+    IQ2_KL    = 157
+    IQ1_KT    = 158
     Q4_0_R8   = 202
     Q5_0_R4   = 206
     Q8_0_R8   = 208
@@ -1509,6 +1538,9 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.IQ2_KT      : ( 256,   68),
     GGMLQuantizationType.IQ3_KT      : ( 256,  100),
     GGMLQuantizationType.IQ4_KT      : ( 256,  128),
+    GGMLQuantizationType.IQ3_KS      : ( 256,  102),
+    GGMLQuantizationType.IQ2_KL      : ( 256,   86),
+    GGMLQuantizationType.IQ1_KT      : ( 256,   56),
     GGMLQuantizationType.Q4_0_R8     : (  32,   18),
     GGMLQuantizationType.Q5_0_R4     : (  32,   22),
     GGMLQuantizationType.Q8_0_R8     : (  32,   34),
