@@ -1,3 +1,7 @@
+This fork enables support for Armv8.0 architectures. All features (new quants, runtime repacking...) works, the only exception I found is quantizing with KT quants (however you can quantize on a properly supported machine and the model will work). See [the discussion](https://github.com/ikawrakow/ik_llama.cpp/discussions/556) for more information.
+
+Please note that the performance will be less than optimal, mainly because the last v8.0 core (A73) only has about 1/7 the performance of the latest architectures, plus having to emulate unsupported features (dot products and FP16 ops).
+
 # ik_llama.cpp: llama.cpp fork with better CPU performance
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
