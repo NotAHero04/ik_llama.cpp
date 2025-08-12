@@ -2344,7 +2344,7 @@ void mul_mat_iq1_kt_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     auto compute_dot = [&dot] (const int8_t * y, const int8x16x2_t * xv) {
         for (int k = 0; k < 4; ++k) {
             auto yv = vld1q_s8_x2(y + 32*k);
-            dot.val[k] = vdotq_s32(vdotq_s32(vdupq_n_s32(0), xv[k].val[0], yv.val[0]), xv[k].val[1], yv.val[1]);
+            dot.val[k] = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), xv[k].val[0], yv.val[0]), xv[k].val[1], yv.val[1]);
         }
         dot.val[0] = vpaddq_s32(dot.val[0], dot.val[1]);
         dot.val[2] = vpaddq_s32(dot.val[2], dot.val[3]);
@@ -2393,14 +2393,14 @@ void mul_mat_iq1_kt_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo&
                     auto xh = trellis.next32(vget_low_u16(idx.val[ib+2]));
                     auto yl = vld1q_s8_x2(ybl.qs + 64*ib);
                     auto yh = vld1q_s8_x2(ybh.qs + 64*ib);
-                    suml.val[2*ib+0] = vdotq_s32(vdotq_s32(vdupq_n_s32(0), xl.val[0], yl.val[0]), xl.val[1], yl.val[1]);
-                    sumh.val[2*ib+0] = vdotq_s32(vdotq_s32(vdupq_n_s32(0), xh.val[0], yh.val[0]), xh.val[1], yh.val[1]);
+                    suml.val[2*ib+0] = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), xl.val[0], yl.val[0]), xl.val[1], yl.val[1]);
+                    sumh.val[2*ib+0] = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), xh.val[0], yh.val[0]), xh.val[1], yh.val[1]);
                     xl = trellis.next32(vget_high_u16(idx.val[ib+0]));
                     xh = trellis.next32(vget_high_u16(idx.val[ib+2]));
                     yl = vld1q_s8_x2(ybl.qs + 64*ib + 32);
                     yh = vld1q_s8_x2(ybh.qs + 64*ib + 32);
-                    suml.val[2*ib+1] = vdotq_s32(vdotq_s32(vdupq_n_s32(0), xl.val[0], yl.val[0]), xl.val[1], yl.val[1]);
-                    sumh.val[2*ib+1] = vdotq_s32(vdotq_s32(vdupq_n_s32(0), xh.val[0], yh.val[0]), xh.val[1], yh.val[1]);
+                    suml.val[2*ib+1] = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), xl.val[0], yl.val[0]), xl.val[1], yl.val[1]);
+                    sumh.val[2*ib+1] = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), xh.val[0], yh.val[0]), xh.val[1], yh.val[1]);
                 }
                 auto sl1 = vpaddq_s32(suml.val[0], suml.val[1]);
                 auto sl2 = vpaddq_s32(suml.val[2], suml.val[3]);
