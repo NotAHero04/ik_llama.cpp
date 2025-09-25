@@ -13,10 +13,10 @@
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
 #include "json.hpp"
-#include "json-schema-to-grammar.h"
+#include "llama-vocab.h"
 #include "llama.h"
-#include "chat-template.hpp"
-
+#include "chat.h"
+#include "json-schema-to-grammar.h"
 #include <algorithm>
 #include <cinttypes>
 #include <climits>
@@ -230,13 +230,13 @@ void gpt_params_handle_model_default(gpt_params & params) {
             }
             params.hf_file = params.model;
         } else if (params.model.empty()) {
-            params.model = fs_get_cache_file(string_split(params.hf_file, '/').back());
+            params.model = fs_get_cache_file(string_split(params.hf_file, "/").back());
         }
     } else if (!params.model_url.empty()) {
         if (params.model.empty()) {
-            auto f = string_split(params.model_url, '#').front();
-            f = string_split(f, '?').front();
-            params.model = fs_get_cache_file(string_split(f, '/').back());
+            auto f = string_split(params.model_url, "#").front();
+            f = string_split(f, "?").front();
+            params.model = fs_get_cache_file(string_split(f, "/").back());
         }
     } else if (params.model.empty()) {
         params.model = DEFAULT_MODEL_PATH;
@@ -282,6 +282,11 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
         }
     }
 
+    for (auto & rep : params.replacements_draft) {
+        string_process_escapes(rep.first);
+        string_process_escapes(rep.second);
+    }
+
     if (!params.kv_overrides.empty()) {
         params.kv_overrides.emplace_back();
         params.kv_overrides.back().key[0] = 0;
@@ -290,7 +295,7 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
         params.tensor_buft_overrides.push_back({nullptr, nullptr});
     }
 
-    if (!params.chat_template.empty() && !llama_chat_verify_template(nullptr, params.chat_template, params.use_jinja)) {
+    if (!params.chat_template.empty() && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
         throw std::runtime_error(string_format(
             "error: the supplied chat template is not supported: %s%s\n",
             params.chat_template.c_str(),
@@ -505,6 +510,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.n_ctx = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "-cd" || arg == "--ctx-size-draft") {
+        CHECK_ARG
+        params.n_ctx_draft = std::stoi(argv[i]);
+        return true;
+    }
     if (arg == "--grp-attn-n" || arg == "-gan") {
         CHECK_ARG
         params.grp_attn_n = std::stoi(argv[i]);
@@ -589,7 +599,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--samplers") {
         CHECK_ARG
-        const auto sampler_names = string_split(argv[i], ';');
+        const auto sampler_names = string_split(argv[i], ";");
         sparams.samplers_sequence = llama_sampling_types_from_names(sampler_names, true);
         return true;
     }
@@ -725,7 +735,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             }
         }
         return true;
-    }  
+    }
+    if (arg == "--spec-replace") {
+        CHECK_ARG
+        std::string target = argv[i];
+        CHECK_ARG
+        std::string draft = argv[i];
+        params.replacements_draft.emplace_back(std::move(target), std::move(draft));
+        return true;
+    }
     if (arg == "--cfg-negative-prompt") {
         CHECK_ARG
         sparams.cfg_negative_prompt = argv[i];
@@ -765,9 +783,19 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.n_keep = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "--draft") {
+    if (arg == "--draft" || arg == "--draft-max" || arg == "--draft-n") {
         CHECK_ARG
         params.n_draft = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "--draft-min" || arg == "--draft-n-min") {
+        CHECK_ARG
+        params.n_draft_min = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "--draft-p-min") {
+        CHECK_ARG
+        params.p_draft_min = std::stof(argv[i]);
         return true;
     }
     if (arg == "--chunks") {
@@ -934,6 +962,14 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cache_type_v = argv[++i];
         return true;
     }
+    if (arg == "-ctkd" || arg == "--cache-type-k-draft") {
+        params.cache_type_k_draft = argv[++i];
+        return true;
+    }
+    if (arg == "-ctvd" || arg == "--cache-type-v-draft") {
+        params.cache_type_v_draft = argv[++i];
+        return true;
+    }
     if (arg == "-mli" || arg == "--multiline-input") {
         params.multiline_input = true;
         return true;
@@ -966,6 +1002,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-fmoe" || arg == "--fused-moe") {
         params.fused_moe_up_gate = true;
+        return true;
+    }
+    if (arg == "-no-fug" || arg == "--no-fused-up-gate") {
+        params.fused_up_gate = false;
         return true;
     }
     if (arg == "-ser" || arg == "--smart-expert-reduction") {
@@ -1071,7 +1111,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         size_t pos = 0;
         while ((pos = servers.find(",")) != std::string::npos) {
             std::string server = servers.substr(0, pos);
-            ggml_backend_rpc_buffer_type(server.c_str());            
+            ggml_backend_rpc_buffer_type(server.c_str());
             servers.erase(0, pos + 1);
         }
         ggml_backend_rpc_buffer_type(servers.c_str());
@@ -1128,6 +1168,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-thp" || arg == "--transparent-huge-pages") {
         params.use_thp = true;
+        return true;
+    }
+    if (arg == "-vq" || arg == "--validate-quants") {
+        params.validate_quants = true;
         return true;
     }
     if (arg == "--numa") {
@@ -1334,6 +1378,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "--offload-only-active-experts" || arg == "-ooae") {
+        params.only_active_exps = true;
+        return true;
+    }
     if (arg == "--host") {
         CHECK_ARG
         params.hostname = argv[i];
@@ -1442,9 +1490,24 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "--reasoning-budget") {
+        CHECK_ARG
+        params.reasoning_budget = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "--sql-save-file") {
+        CHECK_ARG
+        params.sql_save_file = argv[i];
+        return true;
+    }
+    if (arg == "--sqlite-zstd-ext-file") {
+        CHECK_ARG
+        params.sqlite_zstd_ext_file = argv[i];
+        return true;
+    }
     if (arg == "--chat-template") {
         CHECK_ARG
-        if (!llama_chat_verify_template(nullptr, argv[i], false)) {
+        if (!common_chat_verify_template(argv[i], true)) {
             fprintf(stderr, "error: the supplied chat template is not supported: %s\n", argv[i]);
             fprintf(stderr, "note: llama.cpp does not use jinja parser, we only support commonly used templates\n");
             invalid_param = true;
@@ -1456,9 +1519,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--chat-template-file") {
         CHECK_ARG
         std::string chat_template = read_file(std::string(argv[i]));
-        if (!llama_chat_verify_template(nullptr, chat_template, false)) {
+        if (!common_chat_verify_template(chat_template, true)) {
             fprintf(stderr, "error: the supplied chat template is not supported: %s\n", argv[i]);
-            fprintf(stderr, "note: llama.cpp does not use jinja parser, we only support commonly used templates\n");
             invalid_param = true;
             return true;
         }
@@ -1467,6 +1529,26 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--jinja") {
         params.use_jinja = true;
+        return true;
+    }
+    if (arg == "--chat-template-kwargs") {
+        CHECK_ARG
+        std::string value = argv[i];
+        auto parsed = json::parse(value);
+        for (const auto& item : parsed.items()) {
+            params.default_template_kwargs[item.key()] = item.value().dump();
+        }
+        return true;
+    }
+    if (arg == "--reasoning-format") {
+        CHECK_ARG
+        std::string value = argv[i];
+        params.reasoning_format = common_reasoning_format_from_name(value);
+        return true;
+    }
+    if (arg == "--no-prefill-assistant") {
+        CHECK_ARG
+        params.prefill_assistant = false;
         return true;
     }
     if (arg == "--slot-prompt-similarity" || arg == "-sps") {
@@ -1693,7 +1775,6 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "speculative", "-td,   --threads-draft N",      "number of threads to use during generation (default: same as --threads)" });
     options.push_back({ "speculative", "-tbd,  --threads-batch-draft N",
                                                                         "number of threads to use during batch and prompt processing (default: same as --threads-draft)" });
-    options.push_back({ "speculative", "       --draft N",              "number of tokens to draft for speculative decoding (default: %d)", params.n_draft });
     options.push_back({ "speculative", "-ps,   --p-split N",            "speculative decoding split probability (default: %.1f)", (double)params.p_split });
     options.push_back({ "*",           "-lcs,  --lookup-cache-static FNAME",
                                                                         "path to static lookup cache to use for lookup decoding (not updated by generation)" });
@@ -1701,6 +1782,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "path to dynamic lookup cache to use for lookup decoding (updated by generation)" });
 
     options.push_back({ "*",           "-c,    --ctx-size N",           "size of the prompt context (default: %d, 0 = loaded from model)", params.n_ctx });
+    options.push_back({ "*",           "-cd,   --ctx-size-draft N",     "size of the prompt context for the draft model (default: %d, 0 = loaded from model)", params.n_ctx_draft });
     options.push_back({ "*",           "-n,    --predict N",            "number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)", params.n_predict });
     options.push_back({ "*",           "-b,    --batch-size N",         "logical maximum batch size (default: %d)", params.n_batch });
     options.push_back({ "*",           "-ub,   --ubatch-size N",        "physical maximum batch size (default: %d)", params.n_ubatch });
@@ -1710,6 +1792,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-mla,  --mla-use",              "enable MLA (default: %d)", params.mla_attn });
     options.push_back({ "*",           "-amb,  --attention-max-batch",  "max batch size for attention computations (default: %d)", params.attn_max_batch});
     options.push_back({ "*",           "-fmoe, --fused-moe",            "enable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-no-fug, --no-fused-up-gate",   "disaable fused up-gate (default: %s)", params.fused_up_gate ? "enabled" : "disabled" });
     options.push_back({ "*",         "-ser,  --smart-expert-reduction,","experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
                                                                         "in conversation mode, this will be used as system prompt\n"
@@ -1776,11 +1859,22 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "main",        "       --cfg-negative-prompt-file FNAME",
                                                                         "negative prompt file to use for guidance" });
     options.push_back({ "main",        "       --cfg-scale N",          "strength of guidance (default: %.1f, 1.0 = disable)", (double)sparams.cfg_scale });
-    options.push_back({ "main",        "       --chat-template JINJA_TEMPLATE",
+    options.push_back({ "main",        "       --jinja",
                                                                         "set custom jinja chat template (default: template taken from model's metadata)\n"
                                                                         "if suffix/prefix are specified, template will be disabled\n"
                                                                         "only commonly used templates are accepted:\n"
                                                                         "https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template" });
+    options.push_back({ "main",        "       --chat-template JINJA_TEMPLATE",
+                                                                        "use jinja template for chat (default: disabled)\n" });
+    options.push_back({ "main",        "       --reasoning-format FORMAT",
+                                                                 "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
+                        "- none: leaves thoughts unparsed in `message.content`\n"
+                        "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
+                        "(default: none)", });
+    options.push_back({ "main",      "       --chat-template-kwargs JSON",  "sets additional params for the json template parser"});
+    options.push_back({ "main",      "       --reasoning-budget N",  "controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)" });
+    options.push_back({ "main",      "       --no-prefill-assistant",  "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
+            "when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled\n" });
     options.push_back({ "grammar" });
     options.push_back({ "*",           "       --grammar GRAMMAR",      "BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '%s')", sparams.grammar.c_str() });
     options.push_back({ "*",           "       --grammar-file FNAME",   "file to read grammar from" });
@@ -1811,6 +1905,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-nkvo, --no-kv-offload",        "disable KV offload" });
     options.push_back({ "*",           "-ctk,  --cache-type-k TYPE",    "KV cache data type for K (default: %s)", params.cache_type_k.c_str() });
     options.push_back({ "*",           "-ctv,  --cache-type-v TYPE",    "KV cache data type for V (default: %s)", params.cache_type_v.c_str() });
+    options.push_back({ "*",           "-ctkd, --cache-type-k-draft TYPE", "KV cache data type for K for the draft model" });
+    options.push_back({ "*",           "-ctvd, --cache-type-v-draft TYPE", "KV cache data type for V for the draft model" });
 
     options.push_back({ "perplexity" });
     options.push_back({ "perplexity",  "       --all-logits",           "return logits for all tokens in the batch (default: %s)", params.logits_all ? "true" : "false" });
@@ -1893,6 +1989,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-hfr,  --hf-repo REPO",         "Hugging Face model repository (default: unused)" });
     options.push_back({ "*",           "-hff,  --hf-file FILE",         "Hugging Face model file (default: unused)" });
     options.push_back({ "*",           "-hft,  --hf-token TOKEN",       "Hugging Face access token (default: value from HF_TOKEN environment variable)" });
+    options.push_back({ "*", "--draft-max, --draft, --draft-n N",
+                                                                        "number of tokens to draft for speculative decoding (default: %d)", params.n_draft });
+    options.push_back({ "*", "--draft-min, --draft-n-min N",   "minimum number of draft tokens to use for speculative decoding" });
+    options.push_back({ "*", "--draft-p-min P",                "minimum speculative decoding probability (greedy) (default: %.1f)", (double)params.p_draft_min });
 
     options.push_back({ "retrieval" });
     options.push_back({ "retrieval",   "       --context-file FNAME",   "file to load context from (repeat to specify multiple files)" });
@@ -2034,42 +2134,66 @@ std::string string_format(const char* fmt, ...) {
     return std::string(buf.data(), size);
 }
 
+std::string regex_escape(const std::string& s) {
+    static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
+    return std::regex_replace(s, special_chars, "\\$0");
+}
 
-std::vector<std::string> string_split(std::string input, char separator) {
-    std::vector<std::string> parts;
-    size_t separator_pos = input.find(separator);
-    while (separator_pos != std::string::npos) {
-        std::string part = input.substr(0, separator_pos);
-        parts.emplace_back(part);
-        input = input.substr(separator_pos + 1);
-        separator_pos = input.find(separator);
+std::string string_join(const std::vector<std::string>& values, const std::string& separator) {
+    std::ostringstream result;
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) {
+            result << separator;
+        }
+        result << values[i];
     }
-    parts.emplace_back(input);
+    return result.str();
+}
+
+
+std::vector<std::string> string_split(const std::string& str, const std::string& delimiter) {
+    std::vector<std::string> parts;
+    size_t start = 0;
+    size_t end = str.find(delimiter);
+
+    while (end != std::string::npos) {
+        parts.push_back(str.substr(start, end - start));
+        start = end + delimiter.length();
+        end = str.find(delimiter, start);
+    }
+
+    parts.push_back(str.substr(start));
+
     return parts;
 }
 
-std::string string_join(const std::vector<std::string> & strs, const std::string & delimiter) {
-    if (strs.empty()) {
-        return "";
+std::vector<std::string> string_split(const std::string& str, char delim) {
+    std::vector<std::string> values;
+    std::istringstream str_stream(str);
+    std::string token;
+    while (std::getline(str_stream, token, delim)) {
+        std::string value;
+        std::istringstream token_stream(token);
+        token_stream >> value;
+        values.push_back(value);
     }
-    
-    std::ostringstream oss;
-    for (size_t i = 0; i < strs.size(); ++i) {
-        if (i > 0) {
-            oss << delimiter;
-        }
-        oss << strs[i];
-    }
-    return oss.str();
+    return values;
+}
+
+static bool is_utf8_whitespace(uint8_t c) {
+    // Basic ASCII whitespace
+    if (c <= 0x7F) return isspace(c);
+    // Else: Not whitespace (or you'd need a full Unicode table)
+    return false;
 }
 
 std::string string_strip(const std::string & str) {
     size_t start = 0;
     size_t end = str.size();
-    while (start < end && std::isspace(str[start])) {
+    while (start < end && is_utf8_whitespace(str[start])) {
         start++;
     }
-    while (end > start && std::isspace(str[end - 1])) {
+    while (end > start && is_utf8_whitespace(str[end - 1])) {
         end--;
     }
     return str.substr(start, end - start);
@@ -2100,6 +2224,25 @@ void string_replace_all(std::string & s, const std::string & search, const std::
         s.replace(pos, search.length(), replace);
         pos += replace.length();
     }
+}
+
+bool string_ends_with(const std::string_view& str, const std::string_view& suffix) {
+    return str.size() >= suffix.size() && str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+size_t string_find_partial_stop(const std::string_view& str, const std::string_view& stop) {
+    if (!str.empty() && !stop.empty()) {
+        const char text_last_char = str.back();
+        for (int64_t char_index = stop.size() - 1; char_index >= 0; char_index--) {
+            if (stop[char_index] == text_last_char) {
+                const auto current_partial = stop.substr(0, char_index + 1);
+                if (string_ends_with(str, current_partial)) {
+                    return str.size() - char_index - 1;
+                }
+            }
+        }
+    }
+
+    return std::string::npos;
 }
 
 void string_process_escapes(std::string & input) {
@@ -2519,6 +2662,7 @@ struct llama_model_params llama_model_params_from_gpt_params(const gpt_params & 
     mparams.check_tensors   = params.check_tensors;
     mparams.repack_tensors  = params.repack_tensors;
     mparams.use_thp         = params.use_thp;
+    mparams.validate_quants = params.validate_quants;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
@@ -2603,8 +2747,10 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
     cparams.mla_attn          = params.mla_attn;
     cparams.attn_max_batch    = params.attn_max_batch;
     cparams.fused_moe_up_gate = params.fused_moe_up_gate;
+    cparams.fused_up_gate     = params.fused_up_gate;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
+    cparams.only_active_experts = params.only_active_exps;
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
@@ -3077,154 +3223,172 @@ bool llama_should_add_bos_token(const llama_model * model) {
 //
 // Chat template utils
 //
+//
+//bool llama_chat_verify_template(const struct llama_model* model, const std::string& tmpl, bool use_jinja) {
+//    if (use_jinja) {
+//        try {
+//            auto chat_template = common_chat_template(tmpl, "<s>", "</s>");
+//            common_chat_inputs inputs;
+//            inputs.messages = json::array({ {
+//                {"role", "user"},
+//                {"content", "test"},
+//            } });
+//            common_chat_params_init(chat_template, inputs);
+//            return true;
+//        }
+//        catch (const std::exception& e) {
+//            fprintf(stdout,"%s: failed to apply template: %s\n", __func__, e.what());
+//            return false;
+//        }
+//    }
+//    llama_chat_message chat[] = { {"user", "test"} };
+//    const int res = llama_chat_apply_template(model, tmpl.c_str(), chat, 1, true, nullptr, 0);
+//    return res >= 0;
+//}
 
-bool llama_chat_verify_template(const struct llama_model* model, const std::string& tmpl, bool use_jinja) {
-    if (use_jinja) {
-        try {
-            auto chat_template = minja::chat_template(tmpl, "<s>", "</s>");
-            chat_template.apply({ {
-                {"role", "user"},
-                {"content", "test"},
-            } }, json(), true);
-            return true;
-        }
-        catch (const std::exception& e) {
-            fprintf(stdout,"%s: failed to apply template: %s\n", __func__, e.what());
-            return false;
-        }
-    }
-    llama_chat_message chat[] = {{"user", "test"}};
-    const int res = llama_chat_apply_template(model, tmpl.c_str(), chat, 1, true, nullptr, 0);
-    return res >= 0;
-}
+//std::string llama_chat_apply_template(const struct llama_model * model,
+//    const common_chat_template& tmpl,
+//    const std::vector<common_chat_msg> & msgs,
+//    bool add_ass,
+//    bool use_jinja) {
+//    if (use_jinja) {
+//        auto messages = json::array();
+//        for (const auto& msg : msgs) {
+//            messages.push_back({ {"role", msg.role}, {"content", msg.content} });
+//        }
+//        common_chat_inputs inputs;
+//        inputs.messages = messages;
+//        inputs.add_generation_prompt = add_ass;
+//        return common_chat_params_init(tmpl, inputs).prompt;
+//    }
+//    int alloc_size = 0;
+//    std::vector<llama_chat_message> chat;
+//    for (auto & msg : msgs) {
+//        chat.push_back({msg.role.c_str(), msg.content.c_str()});
+//        alloc_size += (msg.role.size() + msg.content.size()) * 1.25;
+//    }
+//
+//    std::vector<char> buf(alloc_size);
+//
+//    // run the first time to get the total output length
+//    int32_t res = llama_chat_apply_template(model, tmpl.source().c_str(), chat.data(), chat.size(), add_ass, buf.data(), buf.size());
+//    // error: chat template is not supported
+//    if (res < 0) {
+//        // if the custom "tmpl" is not supported, we throw an error
+//        // this is a bit redundant (for good), since we're not sure if user validated the custom template with llama_chat_verify_template()
+//        throw std::runtime_error("this custom template is not supported");
+//    }
+//
+//    // if it turns out that our buffer is too small, we resize it
+//    if ((size_t)res > buf.size()) {
+//        buf.resize(res);
+//        res = llama_chat_apply_template(model, tmpl.source().c_str(), chat.data(), chat.size(), add_ass, buf.data(), buf.size());
+//    }
+//
+//    std::string formatted_chat(buf.data(), res);
+//    return formatted_chat;
+//}
+////
+//std::string llama_chat_format_single(const struct llama_model * model,
+//    const common_chat_template& tmpl,
+//    const std::vector<common_chat_msg> & past_msg,
+//        const common_chat_msg & new_msg,
+//    bool add_ass,
+//    bool use_jinja) {
+//    std::ostringstream ss;
+//    auto fmt_past_msg = past_msg.empty() ? "" : llama_chat_apply_template(model, tmpl, past_msg, false, use_jinja);
+//    std::vector<common_chat_msg> chat_new(past_msg);
+//    // if the past_msg ends with a newline, we must preserve it in the formatted version
+//    if (add_ass && !fmt_past_msg.empty() && fmt_past_msg.back() == '\n') {
+//        ss << "\n";
+//    };
+//    // format chat with new_msg
+//    chat_new.push_back(new_msg);
+//    auto fmt_new_msg = llama_chat_apply_template(model, tmpl, chat_new, add_ass, use_jinja);
+//    // get the diff part
+//    ss << fmt_new_msg.substr(fmt_past_msg.size(), fmt_new_msg.size() - fmt_past_msg.size());
+//    return ss.str();
+//}
 
-std::string llama_chat_apply_template(const struct llama_model * model,
-    const common_chat_template& tmpl,
-        const std::vector<llama_chat_msg> & msgs,
-    bool add_ass,
-    bool use_jinja) {
-    if (use_jinja) {
-        auto messages = json::array();
-        for (const auto& msg : msgs) {
-            messages.push_back({ {"role", msg.role}, {"content", msg.content} });
-        }
-        return tmpl.apply(messages, /* tools= */ json(), add_ass);
-    }
-    int alloc_size = 0;
-    std::vector<llama_chat_message> chat;
-    for (auto & msg : msgs) {
-        chat.push_back({msg.role.c_str(), msg.content.c_str()});
-        alloc_size += (msg.role.size() + msg.content.size()) * 1.25;
-    }
-
-    std::vector<char> buf(alloc_size);
-
-    // run the first time to get the total output length
-    int32_t res = llama_chat_apply_template(model, tmpl.source().c_str(), chat.data(), chat.size(), add_ass, buf.data(), buf.size());
-    // error: chat template is not supported
-    if (res < 0) {
-            // if the custom "tmpl" is not supported, we throw an error
-            // this is a bit redundant (for good), since we're not sure if user validated the custom template with llama_chat_verify_template()
-            throw std::runtime_error("this custom template is not supported");
-        }
-
-    // if it turns out that our buffer is too small, we resize it
-    if ((size_t) res > buf.size()) {
-        buf.resize(res);
-        res = llama_chat_apply_template(model, tmpl.source().c_str(), chat.data(), chat.size(), add_ass, buf.data(), buf.size());
-    }
-
-    std::string formatted_chat(buf.data(), res);
-    return formatted_chat;
-}
-
-std::string llama_chat_format_single(const struct llama_model * model,
-    const common_chat_template& tmpl,
-        const std::vector<llama_chat_msg> & past_msg,
-        const llama_chat_msg & new_msg,
-    bool add_ass,
-    bool use_jinja) {
-    std::ostringstream ss;
-    auto fmt_past_msg = past_msg.empty() ? "" : llama_chat_apply_template(model, tmpl, past_msg, false, use_jinja);
-    std::vector<llama_chat_msg> chat_new(past_msg);
-    // if the past_msg ends with a newline, we must preserve it in the formatted version
-    if (add_ass && !fmt_past_msg.empty() && fmt_past_msg.back() == '\n') {
-        ss << "\n";
-    };
-    // format chat with new_msg
-    chat_new.push_back(new_msg);
-    auto fmt_new_msg = llama_chat_apply_template(model, tmpl, chat_new, add_ass, use_jinja);
-    // get the diff part
-    ss << fmt_new_msg.substr(fmt_past_msg.size(), fmt_new_msg.size() - fmt_past_msg.size());
-    return ss.str();
-}
-
-std::string llama_chat_format_example(const struct llama_model * model, const common_chat_template& tmpl, bool use_jinja) {
-    std::vector<llama_chat_msg> msgs = {
-        {"system",    "You are a helpful assistant"},
-        {"user",      "Hello"},
-        {"assistant", "Hi there"},
-        {"user",      "How are you?"},
-    };
-    return llama_chat_apply_template(model, tmpl, msgs, true, use_jinja);
-}
-
-
-common_chat_templates llama_chat_templates_from_model(const struct llama_model* model, const std::string& chat_template_override)
-{
-    auto vocab = llama_model_get_vocab(model);
-    std::string default_template_src = chat_template_override;
-    std::string template_tool_use_src = chat_template_override;
-    bool has_explicit_template = !chat_template_override.empty();
-    if (chat_template_override.empty()) {
-        auto str = llama_model_chat_template(model, /* name */ nullptr);
-        if (str) {
-            default_template_src = str;
-            has_explicit_template = true;
-        }
-        str = llama_model_chat_template(model, /* name */ "tool_use");
-        if (str) {
-            template_tool_use_src = str;
-            has_explicit_template = true;
-        }
-    }
-    if (default_template_src.empty() || default_template_src == "chatml") {
-        if (!template_tool_use_src.empty()) {
-            default_template_src = template_tool_use_src;
-        }
-        else {
-            default_template_src = R"(
-                {%- for message in messages -%}
-                    {{- "<|im_start|>" + message.role + "\n" + message.content + "<|im_end|>\n" -}}
-                {%- endfor -%}
-                {%- if add_generation_prompt -%}
-                    {{- "<|im_start|>assistant\n" -}}
-                {%- endif -%}
-            )";
-        }
-    }
-    const auto get_token = [&](llama_token token, const char* name, const char* jinja_variable_name) {
-        if (token == LLAMA_TOKEN_NULL) {
-            if (default_template_src.find(jinja_variable_name) != std::string::npos
-                || template_tool_use_src.find(jinja_variable_name) != std::string::npos) {
-                fprintf(stdout, "%s: warning: vocab does not have a %s token, jinja template won't work as intended.\n", __func__, name);
-            }
-            return std::string();
-        }
-        else {
-            return llama_token_to_piece(model, token, true);
-        }
-    };
-    auto token_bos = get_token(llama_token_bos(model), "BOS", "bos_token");
-    auto token_eos = get_token(llama_token_eos(model), "EOS", "eos_token");
-    return {
-        has_explicit_template,
-        std::make_unique<minja::chat_template>(default_template_src, token_bos, token_eos),
-        template_tool_use_src.empty()
-            ? nullptr
-            : std::make_unique<minja::chat_template>(template_tool_use_src, token_bos, token_eos)
-    };
-}
+//std::string llama_chat_format_example(const struct llama_model * model, const common_chat_template& tmpl, bool use_jinja) {
+//    std::vector<common_chat_msg> msgs = {
+//        {"system",    "You are a helpful assistant", {}},
+//        {"user",      "Hello", {}},
+//        {"assistant", "Hi there", {}},
+//        {"user",      "How are you?", {}},
+//    };
+//    return llama_chat_apply_template(model, tmpl, msgs, true, use_jinja);
+//}
+//
+//#define CHATML_TEMPLATE_SRC \
+//    "{%- for message in messages -%}\n" \
+//    "  {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>\n' -}}\n" \
+//    "{%- endfor -%}\n" \
+//    "{%- if add_generation_prompt -%}\n" \
+//    "  {{- '<|im_start|>assistant\n' -}}\n" \
+//    "{%- endif -%}"
+//
+//common_chat_templates llama_chat_templates_from_model(const struct llama_model* model, const std::string& chat_template_override)
+//{
+//    std::string default_template_src;
+//    std::string template_tool_use_src;
+//    bool has_explicit_template = !chat_template_override.empty();
+//    if (chat_template_override.empty()) {
+//        auto str = llama_model_chat_template(model, /* name */ nullptr);
+//        if (str) {
+//            default_template_src = str;
+//            has_explicit_template = true;
+//        }
+//        str = llama_model_chat_template(model, /* name */ "tool_use");
+//        if (str) {
+//            template_tool_use_src = str;
+//            has_explicit_template = true;
+//        }
+//    }
+//    else {
+//        default_template_src = chat_template_override;
+//    }
+//    if (default_template_src.empty() || default_template_src == "chatml") {
+//        if (!template_tool_use_src.empty()) {
+//            default_template_src = template_tool_use_src;
+//        }
+//        else {
+//            default_template_src = CHATML_TEMPLATE_SRC;
+//        }
+//    }
+//    auto vocab = llama_model_get_vocab(model);
+//    const auto get_token = [&](llama_token token, const char* name, const char* jinja_variable_name) {
+//        if (token == LLAMA_TOKEN_NULL) {
+//            if (default_template_src.find(jinja_variable_name) != std::string::npos
+//                || template_tool_use_src.find(jinja_variable_name) != std::string::npos) {
+//                fprintf(stdout, "%s: warning: vocab does not have a %s token, jinja template won't work as intended.\n", __func__, name);
+//            }
+//            return std::string();
+//        }
+//        else {
+//            return llama_token_to_piece(model, token, true);
+//        }
+//    };
+//    auto token_bos = get_token(llama_token_bos_impl(*vocab), "BOS", "bos_token");
+//    auto token_eos = get_token(llama_token_eos_impl(*vocab), "EOS", "eos_token");
+//    try {
+//        return {
+//            has_explicit_template,
+//            std::make_unique<minja::chat_template>(default_template_src, token_bos, token_eos),
+//            template_tool_use_src.empty()
+//                ? nullptr
+//                : std::make_unique<minja::chat_template>(template_tool_use_src, token_bos, token_eos),
+//        };
+//    }
+//    catch (const std::exception& e) {
+//        LOG("%s: failed to parse chat template: %s\n", __func__, e.what());
+//        return {
+//            has_explicit_template,
+//            std::make_unique<minja::chat_template>(CHATML_TEMPLATE_SRC, token_bos, token_eos),
+//            nullptr,
+//        };
+//    }
+//}
 
 //
 // KV cache utils
@@ -3667,6 +3831,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "no_mmap: %s # default: false\n", !params.use_mmap ? "true" : "false");
     fprintf(stream, "repack: %s # default: false\n", params.repack_tensors ? "true" : "false");
     fprintf(stream, "use_thp: %s # default: false\n", params.use_thp ? "true" : "false");
+    fprintf(stream, "validate_quants: %s # default: false\n", params.validate_quants ? "true" : "false");
     fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
     fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);
     fprintf(stream, "ppl_stride: %d # default: 0\n", params.ppl_stride);
@@ -3698,6 +3863,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "mla_attn: %d # default: 0\n", params.mla_attn);
     fprintf(stream, "attn_max_batch: %d # default: 0\n", params.attn_max_batch);
     fprintf(stream, "fused_moe: %s # default: false\n", params.fused_moe_up_gate ? "true" : "false");
+    fprintf(stream, "fused_up_gate: %s # default: true\n", params.fused_up_gate ? "true" : "false");
     fprintf(stream, "ser: %d,%g # defaulr: -1,0\n", params.min_experts, params.thresh_experts);
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
 
@@ -3712,28 +3878,4 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "typical_p: %f # default: 1.0\n", sparams.typical_p);
     fprintf(stream, "verbose_prompt: %s # default: false\n", params.verbose_prompt ? "true" : "false");
     fprintf(stream, "display_prompt: %s # default: true\n", params.display_prompt ? "true" : "false");
-}
-
-// Additional string utilities for builder pattern compatibility
-bool string_starts_with(const std::string & str, const std::string & prefix) {
-    return str.rfind(prefix, 0) == 0;
-}
-
-bool string_ends_with(const std::string_view & str, const std::string_view & suffix) {
-    return str.size() >= suffix.size() && str.compare(str.size()-suffix.size(), suffix.size(), suffix) == 0;
-}
-
-size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop) {
-    if (!str.empty() && !stop.empty()) {
-        const char text_last_char = str.back();
-        for (int64_t char_index = stop.size() - 1; char_index >= 0; char_index--) {
-            if (stop[char_index] == text_last_char) {
-                const auto current_partial = stop.substr(0, char_index + 1);
-                if (string_ends_with(str, current_partial)) {
-                    return str.size() - char_index - 1;
-                }
-            }
-        }
-    }
-    return std::string::npos;
 }

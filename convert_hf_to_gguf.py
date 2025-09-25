@@ -320,7 +320,7 @@ class Model:
                         gguf.LlamaFileType.MOSTLY_Q4_0,
                         gguf.LlamaFileType.MOSTLY_Q4_1,
                     ):
-                        data_qtype = gguf.GGMLQuantizationType.Q5_0  
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
                     elif self.ftype in (
                         gguf.LlamaFileType.MOSTLY_Q5_0,
                         gguf.LlamaFileType.MOSTLY_Q5_1,
@@ -418,7 +418,7 @@ class Model:
 
         logger.info("Set model quantization version")
         self.gguf_writer.add_quantization_version(gguf.GGML_QUANT_VERSION)
-        
+
         logger.info("***********************************************************************************************")
         logger.info("** Converting to `q4_0`,`q4_1`,`q5_0`, `q5_1` or `q6_0` is not equiv to using `llama-quantize`!")
         logger.info("** Ftype `q4_0`,`q4_1` are here converting embeddings, output, attn_k and attn_v/qkv in q5_0.")
@@ -555,6 +555,9 @@ class Model:
         # NOTE: if you get an error here, you need to update the convert_hf_to_gguf_update.py script
         #       or pull the latest version of the model from Huggingface
         #       don't edit the hashes manually!
+        if chkhsh == "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273":
+            # ref: https://huggingface.co/alvarobartt/grok-2-tokenizer
+            res = "grok-2"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -1905,12 +1908,20 @@ class BitnetModel(Model):
         return tensors
 
 
-@Model.register("GrokForCausalLM")
+@Model.register("GrokForCausalLM", "Grok1ForCausalLM")
 class GrokModel(Model):
     model_arch = gguf.MODEL_ARCH.GROK
 
     def set_vocab(self):
-        self._set_vocab_sentencepiece()
+        if (self.dir_model / 'tokenizer.model').is_file():
+            self._set_vocab_sentencepiece()
+            return
+
+        if not (self.dir_model / 'tokenizer.json').is_file() or not (self.dir_model / 'chat_template.jinja').is_file():
+            logger.error('Error: Missing vocab and chat template, download files from https://huggingface.co/alvarobartt/grok-2-tokenizer')
+            sys.exit(1)
+
+        self._set_vocab_gpt2()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1918,11 +1929,46 @@ class GrokModel(Model):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
-    _experts: list[dict[str, Tensor]] | None = None
+        self.gguf_writer.add_attn_logit_softcapping(self.hparams.get("attn_logit_softcapping", 30.0))
+        self.gguf_writer.add_router_logit_softcapping(self.hparams.get("router_logit_softcapping", 30.0))
+        if (final_logit_softcap := self.hparams.get("final_logit_softcapping")):
+            self.gguf_writer.add_final_logit_softcapping(final_logit_softcap)
+
+        if (rope_dim := self.hparams.get("head_dim")) is None:
+            rope_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+
+        if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
+            self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+
+        # Treat "original" as "yarn", seems to have been a mistake
+        if self.hparams.get("rope_type") in ("yarn", "original"):
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(self.hparams["scaling_factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["original_max_position_embeddings"])
+            self.gguf_writer.add_rope_scaling_yarn_ext_factor(self.hparams["extrapolation_factor"])
+            self.gguf_writer.add_rope_scaling_yarn_attn_factor(self.hparams["attn_factor"])
+            self.gguf_writer.add_rope_scaling_yarn_beta_fast(self.hparams["beta_fast"])
+            self.gguf_writer.add_rope_scaling_yarn_beta_slow(self.hparams["beta_slow"])
+
+        if temp_len := self.hparams.get("attn_temperature_len"):
+            self.gguf_writer.add_attn_temperature_length(temp_len)
+
+        self.gguf_writer.add_attn_output_scale(self.hparams.get("attn_output_multiplier", rope_dim**-0.5))
+        self.gguf_writer.add_embedding_scale(self.hparams["embedding_multiplier_scale"])
+        self.gguf_writer.add_logit_scale(self.hparams["output_multiplier_scale"])
+
+    _experts: list[dict[str, list[Tensor]]] | None = None
+    _cur_expert = ""
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        tensors: list[tuple[str, Tensor]] = []
+        is_expert = ".moe." in name or ".block_sparse_moe.experts." in name
+
+        if not is_expert:
+            tensors.append((self.map_tensor_name(name), data_torch))
+
         # process the experts separately
-        if name.find(".moe.") != -1:
+        if is_expert or self._cur_expert:
             n_experts = self.hparams["num_local_experts"]
 
             assert bid is not None
@@ -1930,32 +1976,41 @@ class GrokModel(Model):
             if self._experts is None:
                 self._experts = [{} for _ in range(self.block_count)]
 
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) >= n_experts * 3:
-                tensors: list[tuple[str, Tensor]] = []
-
-                # merge the experts into a single 3d tensor
-                for wid in ["linear", "linear_1", "linear_v"]:
-                    datas: list[Tensor] = []
-
-                    for xid in range(n_experts):
-                        ename = f"transformer.decoder_layer.{bid}.moe.{xid}.{wid}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
-
-                    data_torch = torch.stack(datas, dim=0)
-
-                    merged_name = f"transformer.decoder_layer.{bid}.moe.{wid}.weight"
-
-                    new_name = self.map_tensor_name(merged_name)
-
-                    tensors.append((new_name, data_torch))
-                return tensors
-            else:
+            # concatenate split tensors
+            if name in self._experts[bid]:
+                self._cur_expert = name
+                self._experts[bid][name].append(data_torch)
                 return []
+            elif is_expert:
+                self._cur_expert = name
+                self._experts[bid][name] = [data_torch]
+                return []
+            else:
+                self._cur_expert = ""
 
-        return [(self.map_tensor_name(name), data_torch)]
+            for bid in range(self.block_count):
+                if len(self._experts[bid]) >= n_experts * 3:
+                    # merge the experts into a single 3d tensor
+                    for wid in [("linear", "w1", 0), ("linear_1", "w2", 1), ("linear_v", "w3", 0)]:
+                        datas: list[Tensor] = []
+
+                        for xid in range(n_experts):
+                            ename = f"transformer.decoder_layer.{bid}.moe.{xid}.{wid[0]}.weight"
+                            if ename not in self._experts[bid]:
+                                ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{wid[1]}.weight"
+                            tensor_list = self._experts[bid][ename]
+                            datas.append(torch.cat(tensor_list, dim=wid[2]) if len(tensor_list) > 1 else tensor_list[0])
+                            del self._experts[bid][ename]
+
+                        data_torch = torch.stack(datas, dim=0)
+
+                        merged_name = f"transformer.decoder_layer.{bid}.moe.{wid[0]}.weight"
+
+                        new_name = self.map_tensor_name(merged_name)
+
+                        yield (new_name, data_torch)
+
+        yield from tensors
 
 
 @Model.register("DbrxForCausalLM")
@@ -2193,6 +2248,141 @@ class Qwen3Model(Qwen2Model):
 @Model.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
+
+
+@Model.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
+class Ernie4_5Model(Model):
+    model_arch = gguf.MODEL_ARCH.ERNIE4_5
+
+    def set_vocab(self):
+        self._set_vocab_sentencepiece()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        num_heads = self.hparams["num_attention_heads"]
+        num_kv_heads = self.hparams["num_key_value_heads"]
+        if (head_dim := self.hparams.get("head_dim")) is None:
+            head_dim = self.hparams["hidden_size"] // num_heads
+
+        if "ernie." in name:
+            name = name.replace("ernie.", "model.")
+        # split the qkv weights
+        # qkv_proj shape: [(num_heads + 2 * num_kv_heads) * head_dim, hidden_size]
+        if "qkv_proj" in name:
+            name_q = name.replace("qkv_proj.weight", "q_proj.weight")
+            name_k = name.replace("qkv_proj.weight", "k_proj.weight")
+            name_v = name.replace("qkv_proj.weight", "v_proj.weight")
+            total_q_dim = num_heads * head_dim
+            total_k_dim = num_kv_heads * head_dim
+            total_v_dim = num_kv_heads * head_dim
+            q_proj_weight, k_proj_weight, v_proj_weight = data_torch.split([total_q_dim, total_k_dim, total_v_dim], dim=0)
+            return [
+                (self.map_tensor_name(name_q), q_proj_weight),
+                (self.map_tensor_name(name_k), k_proj_weight),
+                (self.map_tensor_name(name_v), v_proj_weight)
+            ]
+        # split the up_gate_proj into gate and up
+        # up_gate_proj shape: [2 * intermediate_size, hidden_size]
+        if "up_gate_proj" in name:
+            name_up = name.replace("up_gate_proj.weight", "up_proj.weight")
+            name_gate = name.replace("up_gate_proj.weight", "gate_proj.weight")
+            dim_half = data_torch.shape[0] // 2
+            gate_proj_weight, up_proj_weight = data_torch.split(dim_half, dim=0)
+            return [
+                (self.map_tensor_name(name_gate), gate_proj_weight),
+                (self.map_tensor_name(name_up), up_proj_weight)
+            ]
+        return [(self.map_tensor_name(name), data_torch)]
+
+
+@Model.register("Ernie4_5_MoeForCausalLM")
+class Ernie4_5MoeModel(Ernie4_5Model):
+    model_arch = gguf.MODEL_ARCH.ERNIE4_5_MOE
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._experts = [{} for _ in range(self.block_count)]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_expert_count(self.hparams["moe_num_experts"])
+        self.gguf_writer.add_expert_used_count(self.hparams["moe_k"])
+        self.gguf_writer.add_interleave_moe_layer_step(self.hparams["moe_layer_interval"])
+        self.gguf_writer.add_leading_dense_block_count(self.hparams["moe_layer_start_index"])
+        if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
+            self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+        if (shared_expert_count := self.hparams.get('moe_num_shared_experts')) is not None:
+            self.gguf_writer.add_expert_shared_count(shared_expert_count)
+            if shared_expert_count > 0 and (shared_expert_intermediate_size := self.hparams.get('intermediate_size')) is not None and (num_key_value_heads := self.hparams.get('num_key_value_heads')) is not None:
+                self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_intermediate_size // num_key_value_heads)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Modify correction bias name as in DeepseekV2
+        if name.endswith("e_score_correction_bias"):
+            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
+
+        # skip Multi-Token Prediction (MTP) layers (again, same as DeepseekV2)
+        match = re.match(r"model.mtp_block.(\d+)", name)
+        if match:
+            return []
+
+        # skip all other MTP tensors for now
+        match = re.match(r"model.mtp_emb_norm.(\d+)", name)
+        if match:
+            return []
+
+        match = re.match(r"model.mtp_hidden_norm.(\d+)", name)
+        if match:
+            return []
+
+        match = re.match(r"model.mtp_linear_proj.(\d+)", name)
+        if match:
+            return []
+
+        # process the experts separately
+        if name.find("mlp.experts") != -1:
+            n_experts = self.hparams["moe_num_experts"]
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+
+                # merge the experts into a single 3d tensor
+                for w_name in ["gate_proj", "up_proj", "down_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename_to_retrieve = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename_to_retrieve])
+                        del self._experts[bid][ename_to_retrieve]
+
+                    data_torch = torch.stack(datas, dim=0)
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                    new_name = self.map_tensor_name(merged_name)
+                    tensors.append((new_name, data_torch))
+
+                return tensors
+            else:
+                return []
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._experts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
 
 @Model.register("GPT2LMHeadModel")
 class GPT2Model(Model):

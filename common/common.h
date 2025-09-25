@@ -15,14 +15,18 @@
 
 #define LOG_NO_FILE_LINE_FUNCTION
 #include "log.h"
-
+#include <set>
 #include <cmath>
 #include <string>
+#include <sstream>
+#include <string_view>
 #include <vector>
 #include <random>
 #include <thread>
 #include <unordered_map>
 #include <tuple>
+#include <map>
+#include <sstream>
 
 #ifdef _WIN32
 #define DIRECTORY_SEPARATOR '\\'
@@ -74,6 +78,14 @@ enum dimre_method {
     DIMRE_METHOD_MEAN,
 };
 
+// reasoning API response format (not to be confused as chat template's reasoning format)
+enum common_reasoning_format {
+    COMMON_REASONING_FORMAT_NONE,
+    COMMON_REASONING_FORMAT_AUTO,
+    COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY, // Extract thinking tag contents and return as `message.reasoning_content`, or leave inline in <think> tags in stream mode
+    COMMON_REASONING_FORMAT_DEEPSEEK,        // Extract thinking tag contents and return as `message.reasoning_content`, including in streaming deltas.
+};
+
 struct gpt_params {
     uint32_t seed                 = LLAMA_DEFAULT_SEED; // RNG seed
 
@@ -83,10 +95,13 @@ struct gpt_params {
     int32_t n_threads_batch_draft =    -1;
     int32_t n_predict             =    -1; // new tokens to predict
     int32_t n_ctx                 =     0; // context size
+    int32_t n_ctx_draft           =     0; // context size for draft model
     int32_t n_batch               =  2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_ubatch              =   512; // physical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_keep                =     0; // number of tokens to keep from initial prompt
-    int32_t n_draft               =     5; // number of tokens to draft during speculative decoding
+    int32_t n_draft               =    16; // number of tokens to draft during speculative decoding
+    int32_t n_draft_min           =     1; // minimum number of tokens to draft during speculative decoding
+    float   p_draft_min           =  0.8f; // minimum speculative decoding probability (greedy)
     int32_t n_chunks              =    -1; // max number of chunks to process (-1 = unlimited)
     int32_t n_parallel            =     1; // number of parallel sequences to decode
     int32_t n_sequences           =     1; // number of sequences to decode
@@ -101,9 +116,9 @@ struct gpt_params {
     float   rope_freq_base        =  0.0f; // RoPE base frequency
     float   rope_freq_scale       =  0.0f; // RoPE frequency scaling factor
     float   yarn_ext_factor       = -1.0f; // YaRN extrapolation mix factor
-    float   yarn_attn_factor      =  1.0f; // YaRN magnitude scaling factor
-    float   yarn_beta_fast        = 32.0f; // YaRN low correction dim
-    float   yarn_beta_slow        =  1.0f; // YaRN high correction dim
+    float   yarn_attn_factor      =  -1.0f; // YaRN magnitude scaling factor
+    float   yarn_beta_fast        = -1.0f; // YaRN low correction dim
+    float   yarn_beta_slow        =  -1.0f; // YaRN high correction dim
     int32_t yarn_orig_ctx         =     0; // YaRN original context length
     float   defrag_thold          = -1.0f; // KV cache defragmentation threshold
 
@@ -144,6 +159,8 @@ struct gpt_params {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     std::vector<std::pair<int,int>> offload_policy;
+
+    std::vector<std::pair<std::string, std::string>> replacements_draft; // main to speculative model replacements
 
     bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_lora_adapter_apply)
     std::vector<llama_lora_adapter_info> lora_adapters; // lora adapter path with user defined scale
@@ -186,6 +203,7 @@ struct gpt_params {
     int  mla_attn          = 0;     // MLA 0: standard attention, 1: MLA with K and transposed V cache, 2: MLA with just K cache
     int  attn_max_batch    = 0;     // Max batch size to use when computing attention (only applicable if flash_attn = false)
     bool fused_moe_up_gate = false; // fused up*unary(gate) op for MoE models
+    bool fused_up_gate     = true;  // fused up*unary(gate) op
     int  min_experts       = -1;
     float thresh_experts   = 0;
 
@@ -204,9 +222,13 @@ struct gpt_params {
     bool check_tensors     = false; // validate tensor data
     bool repack_tensors    = false; // repack tensors if interleaved variant is available
     bool use_thp           = false; // use transparent huge pages (linux only)
+    bool validate_quants   = false; // if true, check for NaNs while loading the model
+    bool only_active_exps  = false; // if true, offload only active experts (relevant only for hybrid CPU/GPU)
 
     std::string cache_type_k = "f16"; // KV cache data type for the K
     std::string cache_type_v = "f16"; // KV cache data type for the V
+    std::string cache_type_k_draft = ""; // KV cache data type for K for the draft model
+    std::string cache_type_v_draft = ""; // KV cache data type for V for the draft model
 
     // multimodal models (see examples/llava)
     std::string mmproj = "";        // path to multimodal projector
@@ -231,18 +253,28 @@ struct gpt_params {
     bool use_jinja = false;                                                                                 // NOLINT
     std::string system_prompt = "";
     bool enable_chat_template = true;
+    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    int reasoning_budget = -1;
+    bool prefill_assistant = true;
 
     std::vector<std::string> api_keys;
 
     std::string ssl_file_key  = "";
     std::string ssl_file_cert = "";
 
-    bool endpoint_slots   = true;
+    std::map<std::string, std::string> default_template_kwargs;
+
+    // "advanced" endpoints are disabled by default for better security
+    bool webui            = true;
+    bool endpoint_slots   = false;
+    bool endpoint_props   = false; // only control POST requests, not GET
     bool endpoint_metrics = false;
 
     bool log_json = false;
 
     std::string slot_save_path;
+    std::string sql_save_file;
+    std::string sqlite_zstd_ext_file;
 
     float slot_prompt_similarity = 0.5f;
 
@@ -303,19 +335,24 @@ std::string gpt_params_get_system_info(const gpt_params & params);
 //
 // String utils
 //
-
-std::vector<std::string> string_split(std::string input, char separator);
-std::string string_join(const std::vector<std::string> & strs, const std::string & delimiter);
-
+std::string string_join(const std::vector<std::string>& values, const std::string& separator);
 std::string string_strip(const std::string & str);
 std::string string_get_sortable_timestamp();
 
-void string_replace_all(std::string & s, const std::string & search, const std::string & replace);
+static bool string_starts_with(const std::string& str,
+    const std::string& prefix) {  // While we wait for C++20's std::string::starts_with...
+    return str.rfind(prefix, 0) == 0;
+}
 
-// Additional string utilities for builder pattern compatibility
-bool string_starts_with(const std::string & str, const std::string & prefix);
-bool string_ends_with(const std::string_view & str, const std::string_view & suffix);
-size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop);
+std::vector<std::string> string_split(const std::string& str, const std::string& delimiter);
+std::vector<std::string> string_split(const std::string& str, char delim);
+
+void string_replace_all(std::string & s, const std::string & search, const std::string & replace);
+// While we wait for C++20's std::string::ends_with...
+bool string_ends_with(const std::string_view& str, const std::string_view& suffix);
+size_t string_find_partial_stop(const std::string_view& str, const std::string_view& stop);
+
+std::string regex_escape(const std::string& s);
 
 template<class T>
 static std::vector<T> string_split(const std::string & str, char delim) {
@@ -329,6 +366,22 @@ static std::vector<T> string_split(const std::string & str, char delim) {
         values.push_back(value);
     }
     return values;
+}
+
+template<>
+std::vector<std::string> string_split<std::string>(const std::string& input, char separator)
+{
+    std::vector<std::string> parts;
+    size_t begin_pos = 0;
+    size_t separator_pos = input.find(separator);
+    while (separator_pos != std::string::npos) {
+        std::string part = input.substr(begin_pos, separator_pos - begin_pos);
+        parts.emplace_back(part);
+        begin_pos = separator_pos + 1;
+        separator_pos = input.find(separator, begin_pos);
+    }
+    parts.emplace_back(input.substr(begin_pos, separator_pos - begin_pos));
+    return parts;
 }
 
 bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_override> & overrides);
@@ -421,52 +474,59 @@ bool llama_should_add_bos_token(const llama_model * model);
 //
 // Chat template utils
 //
+//struct common_tool_call {
+//    std::string name;
+//    std::string arguments;
+//    std::string id;
+//};
+//
+//// same with llama_chat_message, but uses std::string
+//struct common_chat_msg {
+//    std::string role;
+//    std::string content;
+//    std::vector<common_tool_call> tool_calls;
+//    std::string reasoning_content = "";
+//};
 
-// same with llama_chat_message, but uses std::string
-struct llama_chat_msg {
-    std::string role;
-    std::string content;
-};
-
-// Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
-bool llama_chat_verify_template(const struct llama_model* , const std::string& tmpl, bool use_jinja);
-
-namespace minja {
-    class chat_template;
-}
-
-typedef minja::chat_template common_chat_template;
-
-struct common_chat_templates {
-    bool has_explicit_template; // Model had builtin template or template overridde was specified.
-    std::unique_ptr<common_chat_template> template_default; // always set (defaults to chatml)
-    std::unique_ptr<common_chat_template> template_tool_use;
-};
-
-
-// CPP wrapper for llama_chat_apply_template
-// If the built-in template is not supported, we default to chatml
-// If the custom "tmpl" is not supported, we throw an error
-std::string llama_chat_apply_template(
-    const struct llama_model* model,
-    const common_chat_template& tmpl,
-    const std::vector< llama_chat_msg>& chat,
-    bool add_ass,
-    bool use_jinja);
-
-// Format single message, while taking into account the position of that message in chat history
-std::string  llama_chat_format_single(const struct llama_model* model,
-    const common_chat_template& tmpl,
-    const std::vector< llama_chat_msg>& past_msg,
-    const  llama_chat_msg& new_msg,
-    bool add_ass,
-    bool use_jinja);
-
-// Returns an example of formatted chat
-std::string  llama_chat_format_example(const struct llama_model* model,
-    const common_chat_template& tmpl, bool use_jinja);
-
-common_chat_templates  llama_chat_templates_from_model(const struct llama_model* model, const std::string& chat_template_override);
+//// Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
+//bool llama_chat_verify_template(const struct llama_model* , const std::string& tmpl, bool use_jinja);
+//
+//namespace minja {
+//    class chat_template;
+//}
+//
+//typedef minja::chat_template common_chat_template;
+//
+//struct common_chat_templates {
+//    bool has_explicit_template; // Model had builtin template or template overridde was specified.
+//    std::unique_ptr<common_chat_template> template_default; // always set (defaults to chatml)
+//    std::unique_ptr<common_chat_template> template_tool_use;
+//};
+//
+//
+//// CPP wrapper for llama_chat_apply_template
+//// If the built-in template is not supported, we default to chatml
+//// If the custom "tmpl" is not supported, we throw an error
+//std::string llama_chat_apply_template(
+//    const struct llama_model* model,
+//    const common_chat_template& tmpl,
+//    const std::vector< common_chat_msg>& chat,
+//    bool add_ass,
+//    bool use_jinja);
+//
+//// Format single message, while taking into account the position of that message in chat history
+//std::string  llama_chat_format_single(const struct llama_model* model,
+//    const common_chat_template& tmpl,
+//    const std::vector< common_chat_msg>& past_msg,
+//    const  common_chat_msg& new_msg,
+//    bool add_ass,
+//    bool use_jinja);
+//
+//// Returns an example of formatted chat
+//std::string  llama_chat_format_example(const struct llama_model* model,
+//    const common_chat_template& tmpl, bool use_jinja);
+//
+//common_chat_templates  llama_chat_templates_from_model(const struct llama_model* model, const std::string& chat_template_override);
 
 
 //

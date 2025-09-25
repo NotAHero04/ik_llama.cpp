@@ -70,50 +70,52 @@ extern "C" {
     typedef int32_t llama_seq_id;
 
     enum llama_vocab_type {
-        LLAMA_VOCAB_TYPE_NONE = 0, // For models without vocab
-        LLAMA_VOCAB_TYPE_SPM  = 1, // LLaMA tokenizer based on byte-level BPE with byte fallback
-        LLAMA_VOCAB_TYPE_BPE  = 2, // GPT-2 tokenizer based on byte-level BPE
-        LLAMA_VOCAB_TYPE_WPM  = 3, // BERT tokenizer based on WordPiece
-        LLAMA_VOCAB_TYPE_UGM  = 4, // T5 tokenizer based on Unigram
+        LLAMA_VOCAB_TYPE_NONE   = 0, // For models without vocab
+        LLAMA_VOCAB_TYPE_SPM    = 1, // LLaMA tokenizer based on byte-level BPE with byte fallback
+        LLAMA_VOCAB_TYPE_BPE    = 2, // GPT-2 tokenizer based on byte-level BPE
+        LLAMA_VOCAB_TYPE_WPM    = 3, // BERT tokenizer based on WordPiece
+        LLAMA_VOCAB_TYPE_UGM    = 4, // T5 tokenizer based on Unigram
+        LLAMA_VOCAB_TYPE_RWKV   = 5, // RWKV tokenizer based on greedy tokenization
+        LLAMA_VOCAB_TYPE_PLAMO2 = 6, // PLaMo-2 tokenizer based on Aho-Corasick with dynamic programming
     };
 
     // pre-tokenization types
-    enum llama_vocab_pre_type {
-        LLAMA_VOCAB_PRE_TYPE_DEFAULT        = 0,
-        LLAMA_VOCAB_PRE_TYPE_LLAMA3         = 1,
-        LLAMA_VOCAB_PRE_TYPE_DEEPSEEK_LLM   = 2,
-        LLAMA_VOCAB_PRE_TYPE_DEEPSEEK_CODER = 3,
-        LLAMA_VOCAB_PRE_TYPE_FALCON         = 4,
-        LLAMA_VOCAB_PRE_TYPE_MPT            = 5,
-        LLAMA_VOCAB_PRE_TYPE_STARCODER      = 6,
-        LLAMA_VOCAB_PRE_TYPE_GPT2           = 7,
-        LLAMA_VOCAB_PRE_TYPE_REFACT         = 8,
-        LLAMA_VOCAB_PRE_TYPE_COMMAND_R      = 9,
-        LLAMA_VOCAB_PRE_TYPE_STABLELM2      = 10,
-        LLAMA_VOCAB_PRE_TYPE_QWEN2          = 11,
-        LLAMA_VOCAB_PRE_TYPE_OLMO           = 12,
-        LLAMA_VOCAB_PRE_TYPE_DBRX           = 13,
-        LLAMA_VOCAB_PRE_TYPE_SMAUG          = 14,
-        LLAMA_VOCAB_PRE_TYPE_PORO           = 15,
-        LLAMA_VOCAB_PRE_TYPE_CHATGLM3       = 16,
-        LLAMA_VOCAB_PRE_TYPE_CHATGLM4       = 17,
-        LLAMA_VOCAB_PRE_TYPE_VIKING         = 18,
-        LLAMA_VOCAB_PRE_TYPE_JAIS           = 19,
-        LLAMA_VOCAB_PRE_TYPE_TEKKEN         = 20,
-        LLAMA_VOCAB_PRE_TYPE_SMOLLM         = 21,
-        LLAMA_VOCAB_PRE_TYPE_CODESHELL      = 22,
-        LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM  = 28, //llama.cpp lists this as 28
-        LLAMA_VOCAB_PRE_TYPE_GPT4O          = 29,
-        LLAMA_VOCAB_PRE_TYPE_SUPERBPE       = 30,
-        LLAMA_VOCAB_PRE_TYPE_TRILLION       = 31,
-        LLAMA_VOCAB_PRE_TYPE_BAILINGMOE     = 32,
-        LLAMA_VOCAB_PRE_TYPE_LLAMA4         = 33,
-        LLAMA_VOCAB_PRE_TYPE_FALCON_3       = 34,
-        LLAMA_VOCAB_PRE_TYPE_FALCON_E       = 35,
-        LLAMA_VOCAB_PRE_TYPE_SEED_CODER     = 36, //llama.cpp lists this as 35
-        LLAMA_VOCAB_PRE_TYPE_HUNYUAN        = 37, //llama.cpp lists this as 36
-        LLAMA_VOCAB_PRE_TYPE_KIMI_K2        = 38, //llama.cpp lists this as 37
-    };
+    //enum llama_vocab_pre_type {
+    //    LLAMA_VOCAB_PRE_TYPE_DEFAULT        = 0,
+    //    LLAMA_VOCAB_PRE_TYPE_LLAMA3         = 1,
+    //    LLAMA_VOCAB_PRE_TYPE_DEEPSEEK_LLM   = 2,
+    //    LLAMA_VOCAB_PRE_TYPE_DEEPSEEK_CODER = 3,
+    //    LLAMA_VOCAB_PRE_TYPE_FALCON         = 4,
+    //    LLAMA_VOCAB_PRE_TYPE_MPT            = 5,
+    //    LLAMA_VOCAB_PRE_TYPE_STARCODER      = 6,
+    //    LLAMA_VOCAB_PRE_TYPE_GPT2           = 7,
+    //    LLAMA_VOCAB_PRE_TYPE_REFACT         = 8,
+    //    LLAMA_VOCAB_PRE_TYPE_COMMAND_R      = 9,
+    //    LLAMA_VOCAB_PRE_TYPE_STABLELM2      = 10,
+    //    LLAMA_VOCAB_PRE_TYPE_QWEN2          = 11,
+    //    LLAMA_VOCAB_PRE_TYPE_OLMO           = 12,
+    //    LLAMA_VOCAB_PRE_TYPE_DBRX           = 13,
+    //    LLAMA_VOCAB_PRE_TYPE_SMAUG          = 14,
+    //    LLAMA_VOCAB_PRE_TYPE_PORO           = 15,
+    //    LLAMA_VOCAB_PRE_TYPE_CHATGLM3       = 16,
+    //    LLAMA_VOCAB_PRE_TYPE_CHATGLM4       = 17,
+    //    LLAMA_VOCAB_PRE_TYPE_VIKING         = 18,
+    //    LLAMA_VOCAB_PRE_TYPE_JAIS           = 19,
+    //    LLAMA_VOCAB_PRE_TYPE_TEKKEN         = 20,
+    //    LLAMA_VOCAB_PRE_TYPE_SMOLLM         = 21,
+    //    LLAMA_VOCAB_PRE_TYPE_CODESHELL      = 22,
+    //    LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM  = 28, //llama.cpp lists this as 28
+    //    LLAMA_VOCAB_PRE_TYPE_GPT4O          = 29,
+    //    LLAMA_VOCAB_PRE_TYPE_SUPERBPE       = 30,
+    //    LLAMA_VOCAB_PRE_TYPE_TRILLION       = 31,
+    //    LLAMA_VOCAB_PRE_TYPE_BAILINGMOE     = 32,
+    //    LLAMA_VOCAB_PRE_TYPE_LLAMA4         = 33,
+    //    LLAMA_VOCAB_PRE_TYPE_FALCON_3       = 34,
+    //    LLAMA_VOCAB_PRE_TYPE_FALCON_E       = 35,
+    //    LLAMA_VOCAB_PRE_TYPE_SEED_CODER     = 36, //llama.cpp lists this as 35
+    //    LLAMA_VOCAB_PRE_TYPE_HUNYUAN        = 37, //llama.cpp lists this as 36
+    //    LLAMA_VOCAB_PRE_TYPE_KIMI_K2        = 38, //llama.cpp lists this as 37
+    //};
 
     // note: these values should be synchronized with ggml_rope
     // TODO: maybe move this enum to ggml.h (ggml_rope_type)
@@ -270,6 +272,7 @@ extern "C" {
         LLAMA_SPLIT_MODE_ROW     = 2, // split rows across GPUs
     };
 
+
     typedef struct llama_token_data {
         llama_token id; // token id
         float logit;    // log-odds of the token
@@ -375,7 +378,8 @@ extern "C" {
         bool use_mlock;     // force system to keep model in RAM
         bool check_tensors; // validate model tensor data
         bool repack_tensors;// repack if available
-        bool use_thp;       // uase transparent huge pages (linux only)
+        bool use_thp;       // use transparent huge pages (linux only)
+        bool validate_quants; // if true, check for NaNs while loading the model
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -416,9 +420,11 @@ extern "C" {
         bool flash_attn;  // whether to use flash attention [EXPERIMENTAL]
         int  mla_attn;    // whether to use MLA attention [EXPERIMENTAL]
         int  attn_max_batch;    // maximum batch size for attention computations [EXPERIMENTAL]
-        bool fused_moe_up_gate; // whether to use fused MoE up/down op [EXPERIMENTAL]
+        bool fused_moe_up_gate; // whether to use fused MoE up/gate op
+        bool fused_up_gate;     // whether to use fused up/gate op [EXPERIMENTAL]
         int  min_experts;
         float thresh_experts;
+        bool only_active_experts;
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
@@ -792,7 +798,10 @@ extern "C" {
     LLAMA_API void llama_kv_cache_defrag(struct llama_context * ctx);
 
     // Apply the KV cache updates (such as K-shifts, defragmentation, etc.)
-    LLAMA_API void llama_kv_cache_update(struct llama_context * ctx);
+    // Positive return values does not mean a fatal error, but rather a warning.
+    //    0 - success
+    //    1 - Context overflow in a model where k-shift is not supported
+    LLAMA_API int32_t llama_kv_cache_update(struct llama_context * ctx);
 
     //
     // State / sessions
@@ -1106,6 +1115,25 @@ extern "C" {
     // Get list of built-in chat templates
     LLAMA_API int32_t llama_chat_builtin_templates(const char ** output, size_t len);
 
+    typedef void* llama_sampler_context_t;
+
+    struct llama_sampler;
+
+    // user code can implement the interface below in order to create custom llama_sampler
+    struct llama_sampler_i {
+        const char* (*name)  (const struct llama_sampler*);                               // can be NULL
+        void                   (*accept)(struct llama_sampler*, llama_token);             // can be NULL
+        void                   (*apply) (struct llama_sampler*, llama_token_data_array*); // required
+        void                   (*reset) (struct llama_sampler*);                          // can be NULL
+        struct llama_sampler* (*clone) (const struct llama_sampler*);                     // can be NULL if ctx is NULL
+        void                   (*free)  (struct llama_sampler* smpl);                     // can be NULL if ctx is NULL
+    };
+
+    struct llama_sampler {
+        struct llama_sampler_i* iface;
+        llama_sampler_context_t   ctx;
+    };
+
     //
     // Grammar
     //
@@ -1120,6 +1148,9 @@ extern "C" {
             const llama_grammar_element ** rules,
                                  size_t    n_rules,
                                  size_t    start_rule_index);
+
+    struct llama_sampler_grammar;
+    LLAMA_API void llama_grammar_init_lazy(struct llama_sampler_grammar * grammar);
 
     LLAMA_API void llama_grammar_free(struct llama_grammar * grammar);
 
@@ -1236,6 +1267,40 @@ extern "C" {
             struct llama_context * ctx,
           llama_token_data_array * candidates_p,
                            float   top_n_sigma);
+
+
+LLAMA_API void                   llama_sampler_reset(struct llama_sampler* smpl);
+
+LLAMA_API struct llama_grammar* llama_sampler_init_grammar(
+    const struct llama_vocab* vocab,
+    const char* grammar_str,
+
+        const char* grammar_root);
+    /// @details Lazy grammar sampler, introduced in https://github.com/ggerganov/llama.cpp/pull/9639
+/// @param trigger_words A list of words that will trigger the grammar sampler. This may be updated to a loose regex syntax (w/ ^) in a near future.
+/// @param trigger_tokens A list of tokens that will trigger the grammar sampler.
+DEPRECATED(LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy(
+    const struct llama_vocab* vocab,
+        const char* grammar_str,
+        const char* grammar_root,
+        const char** trigger_words,
+        size_t num_trigger_words,
+        const llama_token* trigger_tokens,
+        size_t num_trigger_tokens),
+    "use llama_sampler_init_grammar_lazy_patterns instead");
+
+
+/// @details Lazy grammar sampler, introduced in https://github.com/ggml-org/llama.cpp/pull/9639
+/// @param trigger_patterns A list of patterns that will trigger the grammar sampler. Pattern will be matched from the start of the generation output, and grammar sampler will be fed content starting from its first match group.
+/// @param trigger_tokens A list of tokens that will trigger the grammar sampler. Grammar sampler will be fed content starting from the trigger token included.
+LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
+    const struct llama_vocab* vocab,
+    const char* grammar_str,
+    const char* grammar_root,
+    const char** trigger_patterns,
+    size_t num_trigger_patterns,
+    const llama_token* trigger_tokens,
+    size_t num_trigger_tokens);
 
     ///  @details DRY sampler, designed by p-e-w, as described in: https://github.com/oobabooga/text-generation-webui/pull/5677, porting Koboldcpp implementation authored by pi6am: https://github.com/LostRuins/koboldcpp/pull/982
     LLAMA_API struct llama_sampler_dry * llama_sampler_init_dry(

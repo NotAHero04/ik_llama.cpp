@@ -5562,11 +5562,7 @@ void ggml_vec_dot_q6_0_q8_0(int n, float * restrict s, size_t bs, const void * r
 
 void ggml_vec_dot_q8_0_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-#ifdef HAVE_FANCY_SIMD
-    enum ggml_type dot_type = GGML_TYPE_Q8_1_X4;
-#else
-    enum ggml_type dot_type = GGML_TYPE_Q8_0_X4;
-#endif
+    enum ggml_type dot_type = GGML_TYPE_Q8_2_X4;
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q8_0, vx, bx, dot_type, vy, by, s, bs, 0, 1)) {
         return;
     }
@@ -15461,6 +15457,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_IQ5_KS_R4:break;
         case GGML_TYPE_Q8_KV_R8: break;
         case GGML_TYPE_Q8_K_R8:  break;
+        case GGML_TYPE_Q8_K_R16: break;
         case GGML_TYPE_Q8_KV:    break;
         case GGML_TYPE_BF16_R16: break;
         case GGML_TYPE_Q4_0_4_4:

@@ -277,6 +277,12 @@ size_t quantize_q8_k_r8(const float * GGML_RESTRICT src, void * GGML_RESTRICT ds
 void   dequantize_row_q8_k_r8(const block_q8_k_r8  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 void   vec_dot_q8_k_r8_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 
+void   quantize_row_q8_k_r16_ref(const float * GGML_RESTRICT x, block_q8_k_r16  * GGML_RESTRICT y, int64_t k);
+void   quantize_row_q8_k_r16(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+size_t quantize_q8_k_r16(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+void   dequantize_row_q8_k_r16(const block_q8_k_r16  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void   vec_dot_q8_k_r16_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+
 void   quantize_row_q8_KV_ref(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void   quantize_row_q8_KV(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 size_t quantize_q8_KV(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
@@ -319,6 +325,8 @@ void iqk_quantize_any(int from_type, int to_type,
                       uint64_t nb0, uint64_t nb1, uint64_t nb2, uint64_t nb3,
                       const void * GGML_RESTRICT x, void * GGML_RESTRICT y, void * work_buffer,
                       to_float_t to_float, from_float_t from_float, int ith, int nth);
+
+bool iqk_validate_tensor(const struct ggml_tensor * src);
 
 #ifdef __cplusplus
 }
