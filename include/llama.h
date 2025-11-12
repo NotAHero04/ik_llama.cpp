@@ -122,6 +122,7 @@ extern "C" {
         LLAMA_ROPE_TYPE_NORM   = 0,
         LLAMA_ROPE_TYPE_NEOX   = GGML_ROPE_TYPE_NEOX,
         LLAMA_ROPE_TYPE_MROPE  = GGML_ROPE_TYPE_MROPE,
+        LLAMA_ROPE_TYPE_IMROPE = GGML_ROPE_TYPE_IMROPE,
         LLAMA_ROPE_TYPE_VISION = GGML_ROPE_TYPE_VISION,
     };
 
@@ -342,6 +343,9 @@ extern "C" {
     };
 
     struct llama_model_params {
+        // comma separated list of devices to use for offloading
+        const char* devices;
+
         int32_t n_gpu_layers; // number of layers to store in VRAM
         int32_t mla;          // MLA implementation to use (only applicable to DeepSeek models at this point)
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
@@ -379,6 +383,7 @@ extern "C" {
         bool repack_tensors;// repack if available
         bool use_thp;       // use transparent huge pages (linux only)
         bool validate_quants; // if true, check for NaNs while loading the model
+        bool merge_qkv;     // if true, merge separate Q, K, V tensors into a single, contiguous tensor
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -420,7 +425,10 @@ extern "C" {
         int  mla_attn;    // whether to use MLA attention [EXPERIMENTAL]
         int  attn_max_batch;    // maximum batch size for attention computations [EXPERIMENTAL]
         bool fused_moe_up_gate; // whether to use fused MoE up/gate op
+        bool grouped_expert_routing; // whether to use grouped expert routing (BailingMoeV2 arch)
         bool fused_up_gate;     // whether to use fused up/gate op [EXPERIMENTAL]
+        bool fused_mmad;        // whether to use fused mul+multi_add op [EXPERIMENTAL]
+        bool rope_cache;        // whether to use RoPE cache [EXPERIMENTAL]
         int  min_experts;
         float thresh_experts;
         bool only_active_experts;
@@ -431,6 +439,7 @@ extern "C" {
         ggml_abort_callback abort_callback;
         void *              abort_callback_data;
         void *              offload_policy;
+        void *              cuda_params;
     };
 
     // model quantization parameters
@@ -447,6 +456,7 @@ extern "C" {
         enum ggml_type ffn_gate_type;        // feedforward network gate type
         enum ggml_type ffn_down_type;        // feedforward network down type
         enum ggml_type ffn_up_type;          // feedforward network up type
+        enum ggml_type ffn_gate_inp_type;    // routed experts probabilities typy (relevant for MoE models only)
         bool allow_requantize;               // allow quantizing non-f32/f16 tensors
         bool quantize_output_tensor;         // quantize output.weight
         bool only_copy;                      // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored

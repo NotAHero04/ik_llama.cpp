@@ -59,25 +59,6 @@ static __global__ void fused_mul_silu_f32(const float * x, const float * y, floa
     dst[i] = x[i] * y[i] / (1.0f + expf(-x[i]));
 }
 
-static __global__ void multi_add_f32(int nused, int64_t ne0, int64_t ne1, int64_t nb1, int64_t nb01, const char * src0, char * dst) {
-    const int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
-    int64_t k = ne0*ne1;
-    if (i >= k) {
-        return;
-    }
-    int i1 = i / ne0;
-    int i0 = i % ne0;
-    float * result = (float *)(dst + i1*nb1);
-    const float * s = (const float *)(src0 + i1*nb01) + i0;
-    if (nused == 1) {
-        result[i0] = s[0];
-    } else {
-        float sum = s[0] + s[ne0];
-        for (int j = 2; j < nused; ++j) sum += s[j*ne0];
-        result[i0] = sum;
-    }
-}
-
 static __global__ void fused_mul_relu_f32(const float * x, const float * y, float * dst, const int k) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
@@ -123,6 +104,16 @@ static __global__ void sigmoid_f32(const float * x, float * dst, const int k) {
         return;
     }
     dst[i] = 1.0f / (1.0f + expf(-x[i]));
+}
+
+static __global__ void biased_sigmoid_f32(const float * x, const float * bias, float * dst, float * dst_biased, const int k, const int ncols) {
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+    dst[i] = 1.0f / (1.0f + expf(-x[i]));
+    dst_biased[i] = dst[i] + bias[i % ncols];
 }
 
 static __global__ void hardsigmoid_f32(const float * x, float * dst, const int k) {
@@ -221,6 +212,11 @@ static void sigmoid_f32_cuda(const float * x, float * dst, const int k, cudaStre
     sigmoid_f32<<<num_blocks, CUDA_SIGMOID_BLOCK_SIZE, 0, stream>>>(x, dst, k);
 }
 
+static void biased_sigmoid_f32_cuda(const float * x, const float * bias, float * dst, float * dst_biased, const int k, const int ncols, cudaStream_t stream) {
+    const int num_blocks = (k + CUDA_SIGMOID_BLOCK_SIZE - 1) / CUDA_SIGMOID_BLOCK_SIZE;
+    biased_sigmoid_f32<<<num_blocks, CUDA_SIGMOID_BLOCK_SIZE, 0, stream>>>(x, bias, dst, dst_biased, k, ncols);
+}
+
 static void hardsigmoid_f32_cuda(const float * x, float * dst, const int k, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_HARDSIGMOID_BLOCK_SIZE - 1) / CUDA_HARDSIGMOID_BLOCK_SIZE;
     hardsigmoid_f32<<<num_blocks, CUDA_HARDSIGMOID_BLOCK_SIZE, 0, stream>>>(x, dst, k);
@@ -244,23 +240,6 @@ static void sqr_f32_cuda(const float * x, float * dst, const int k, cudaStream_t
 static void sqrt_f32_cuda(const float * x, float * dst, const int k, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_SQRT_BLOCK_SIZE - 1) / CUDA_SQRT_BLOCK_SIZE;
     sqrt_f32<<<num_blocks, CUDA_SQRT_BLOCK_SIZE, 0, stream>>>(x, dst, k);
-}
-
-static void multi_add_f32_cuda(int nused, int64_t ne0, int64_t ne1, int64_t nb1, int64_t nb01, const char * src0, char * dst, cudaStream_t stream) {
-    int64_t k = ne0 * ne1;
-    const int num_blocks = (k + CUDA_MULTI_ADD_BLOCK_SIZE - 1) / CUDA_MULTI_ADD_BLOCK_SIZE;
-    multi_add_f32<<<num_blocks, CUDA_MULTI_ADD_BLOCK_SIZE, 0, stream>>>(nused, ne0, ne1, nb1, nb01, src0, dst);
-}
-
-void ggml_cuda_op_multi_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->ne[2] == 1 && dst->ne[3] == 1);
-    GGML_ASSERT(dst->nb[0] == sizeof(float));
-    int nused = dst->op_params[0];
-    GGML_ASSERT(nused >= 1);
-    const char * src0 = (const char *)dst->src[0]->data;
-    cudaStream_t stream = ctx.stream();
-    multi_add_f32_cuda(nused, dst->ne[0], dst->ne[1], dst->nb[1], dst->src[0]->nb[1], src0, (char *)dst->data, stream);
 }
 
 void ggml_cuda_op_gelu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -400,6 +379,26 @@ void ggml_cuda_op_sigmoid(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
     sigmoid_f32_cuda(src0_d, dst_d, ggml_nelements(src0), stream);
+}
+
+void ggml_cuda_op_biased_sigmoid(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    GGML_ASSERT(dst->op == GGML_OP_ADD);
+    GGML_ASSERT(dst->src[0]->op == GGML_OP_UNARY);
+    const ggml_tensor * src0 = dst->src[0]->src[0];
+    const ggml_tensor * bias = dst->src[1];
+    const float * src0_d = (const float *)src0->data;
+    float * dst_d = (float *)dst->data;
+    cudaStream_t stream = ctx.stream();
+
+    GGML_ASSERT(ggml_is_contiguous(src0));
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(bias->type == GGML_TYPE_F32);
+    GGML_ASSERT(bias->ne[0] == src0->ne[0]);
+    GGML_ASSERT(ggml_nrows(bias) == 1);
+
+    biased_sigmoid_f32_cuda(src0_d, (const float *)bias->data, (float *)dst->src[0]->data, dst_d, ggml_nelements(src0), src0->ne[0], stream);
 }
 
 void ggml_cuda_op_hardsigmoid(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

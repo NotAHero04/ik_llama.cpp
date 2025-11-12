@@ -256,13 +256,18 @@ struct cmd_params {
     std::vector<bool> embeddings;
     std::vector<llama_model_tensor_buft_override> buft_overrides;
     ggml_numa_strategy numa;
+    std::string cuda_params;
     int reps;
     bool verbose;
     bool warmup;
     bool repack = false;
-    bool fmoe = false;
+    bool fmoe = true;
+    bool ger = false;     // ger = Grouped Expert Routing
     bool no_fug = false;
     bool use_thp = false;
+    bool no_ooae = false;
+    bool mqkv = false;
+    bool rcache = false;
     output_formats output_format;
     output_formats output_format_stderr;
 };
@@ -278,12 +283,12 @@ static const cmd_params cmd_params_defaults = {
     /* type_k               */ {GGML_TYPE_F16},
     /* type_v               */ {GGML_TYPE_F16},
     /* n_threads            */ {{cpu_get_num_math(), cpu_get_num_math()}},
-    /* n_gpu_layers         */ {99},
+    /* n_gpu_layers         */ {999},
     /* rpc_servers          */ {""},
     /* split_mode           */ {LLAMA_SPLIT_MODE_LAYER},
     /* main_gpu             */ {0},
     /* no_kv_offload        */ {false},
-    /* flash_attn           */ {false},
+    /* flash_attn           */ {true},
     /* mla_attn             */ {0},
     /* attn_max_batch       */ {0},
     /* ser                  */ {{-1,0.0f}},
@@ -292,13 +297,18 @@ static const cmd_params cmd_params_defaults = {
     /* embeddings           */ {false},
     /* buft_overrides       */ {},
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
+    /* cuda_params          */ {},
     /* reps                 */ 5,
     /* verbose              */ false,
     /* warmup               */ true,
     /* repack               */ false,
-    /* use_thp              */ false,
-    /* fmoe                 */ false,
+    /* fmoe                 */ true,
+    /* ger                  */ false,
     /* no_fug               */ false,
+    /* use_thp              */ false,
+    /* no_ooae              */ false,
+    /* mqkv                 */ false,
+    /* rcache               */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -320,6 +330,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -t, --threads <n>                   (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
     printf("  -tgb, --threads-gen-batch <n1,n2>   (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
     printf("  -ngl, --n-gpu-layers <n>            (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
+    printf("  --n-cpu-moe <n>                     (default: none)\n");
     printf("  -rpc, --rpc <rpc_servers>           (default: %s)\n", join(cmd_params_defaults.rpc_servers, ",").c_str());
     printf("  -sm, --split-mode <none|layer|row>  (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                 (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
@@ -338,10 +349,15 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                       (default: %s)\n", cmd_params_defaults.verbose ? "1" : "0");
     printf("  -w, --warmup <0|1>                  (default: %s)\n", cmd_params_defaults.warmup ? "1" : "0");
     printf("  -rtr, --run-time-repack <0|1>       (default: %s)\n", cmd_params_defaults.repack ? "1" : "0");
+    printf("  -cuda, --cuda-params <string>       (default: %s)\n", cmd_params_defaults.repack ? "1" : "0");
+    printf("  -mqkv, --merge-qkv                  (default: %s)\n", cmd_params_defaults.mqkv ? "1" : "0");
+    printf("  -rcache, --rope-cache               (default: %s)\n", cmd_params_defaults.rcache ? "1" : "0");
     printf("  -thp, --transparent-huge-pages <0|1> (default: %s)\n", cmd_params_defaults.use_thp? "1" : "0");
     printf("  -ot, --override-tensor pattern      (default: none)\n");
     printf("  -fmoe, --fused-moe <0|1>            (default: %s)\n", cmd_params_defaults.fmoe? "1" : "0");
+    printf("  -ger, --grouped-expert-routing <0|1>(default: %s)\n", cmd_params_defaults.ger ? "1" : "0");
     printf("  -no-fug, --no-fused-up-gate <0|1>   (default: %s)\n", cmd_params_defaults.no_fug? "1" : "0");
+    printf("  -no-ooae, --no-offload-only-active-experts <0|1>   (default: %s)\n", cmd_params_defaults.no_ooae? "1" : "0");
     printf("\n");
     printf("Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter multiple times.\n");
 }
@@ -413,6 +429,19 @@ bool parse_buft_overrides(const std::string& value, std::vector<llama_model_tens
     }
     return true;
 }
+bool add_cpu_buft_overrides(const char * arg, std::vector<llama_model_tensor_buft_override>& overrides) {
+    int n_layers = std::stoi(arg);
+    if (n_layers < 0) {
+        fprintf(stderr, "error: Invalid value for --n-cpu-moe: %s\n", arg);
+        return false;
+    }
+    for (int32_t l = 0; l < n_layers; ++l) {
+        std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate)_exps\\.weight)";
+        overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
+    }
+    return true;
+}
+
 template<class T1, class T2>
 std::vector<std::pair<T1,T2>> string_split_pairs(const std::string & str, char delim) {
     std::vector<std::pair<T1,T2>> values;
@@ -727,6 +756,24 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.repack = std::stoi(argv[i]);
+        } else if (arg == "-cuda" || arg == "--cuda-params") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.cuda_params = argv[i];
+        } else if (arg == "-mqkv" || arg == "--merge-qkv") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.mqkv = std::stoi(argv[i]);
+        } else if (arg == "-rcache" || arg == "--rope-cache") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.rcache = std::stoi(argv[i]);
         } else if (arg == "-thp" || arg == "--transparent-huge-pages") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -739,12 +786,24 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.fmoe = std::stoi(argv[i]);
+        } else if (arg == "-ger" || arg == "--grouped-expert-routing") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.ger = std::stoi(argv[i]);
         } else if (arg == "-no-fug" || arg == "--no-fused-up-gate") {
             if (++i >= argc) {
                 invalid_param = true;
                 break;
             }
             params.no_fug = std::stoi(argv[i]);
+        } else if (arg == "-no-ooae" || arg == "--no-offload-only-active-experts") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.no_ooae = std::stoi(argv[i]);
         } else if (arg == "-ot" || arg == "--override-tensor") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -752,6 +811,15 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             }
             if (!parse_buft_overrides(std::string{argv[i]}, params.buft_overrides)) {
                 fprintf(stderr, "error: Invalid tensor buffer type override: %s\n", argv[i]);
+                invalid_param = true;
+                break;
+            }
+        } else if (arg == "--n-cpu-moe") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            if (!add_cpu_buft_overrides(argv[i], params.buft_overrides)) {
                 invalid_param = true;
                 break;
             }
@@ -825,12 +893,17 @@ struct cmd_params_instance {
     int  attn_max_batch;
     Ser  ser;
     std::vector<float> tensor_split;
+    std::string cuda_params;
     bool use_mmap;
     bool embeddings;
     bool repack = false;
-    bool fmoe = false;
+    bool fmoe = true;
+    bool ger = false;
     bool no_fug = false;
     bool use_thp = false;
+    bool no_ooae = false;
+    bool mqkv = false;
+    bool rcache = false;
     const llama_model_tensor_buft_override* buft_overrides;
 
     llama_model_params to_llama_mparams() const {
@@ -846,6 +919,7 @@ struct cmd_params_instance {
         mparams.use_mmap = use_mmap;
         mparams.repack_tensors = repack;
         mparams.use_thp = use_thp;
+        mparams.merge_qkv = mqkv;
         mparams.tensor_buft_overrides = buft_overrides;
 
         return mparams;
@@ -859,6 +933,7 @@ struct cmd_params_instance {
                main_gpu == other.main_gpu &&
                use_mmap == other.use_mmap &&
                repack == other.repack &&
+               mqkv == other.mqkv &&
                use_thp == other.use_thp &&
                tensor_split == other.tensor_split;
     }
@@ -876,10 +951,14 @@ struct cmd_params_instance {
         cparams.mla_attn = mla_attn;
         cparams.attn_max_batch = attn_max_batch;
         cparams.fused_moe_up_gate = fmoe;
+        cparams.grouped_expert_routing = ger;
+        cparams.rope_cache = rcache;
         cparams.fused_up_gate = !no_fug;
+        cparams.only_active_experts = !no_ooae;
         cparams.min_experts = ser.first;
         cparams.thresh_experts = ser.second;
         cparams.embeddings = embeddings;
+        cparams.cuda_params = (void *)cuda_params.data();
 
         return cparams;
     }
@@ -931,12 +1010,17 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .attn_max_b   = */ amb,
                 /* .ser          = */ ser,
                 /* .tensor_split = */ ts,
+                /* .cuda_params  = */ params.cuda_params,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
+                /* .ger          = */ params.ger,
                 /* .no_fug       = */ params.no_fug,
                 /* .use_thp      = */ params.use_thp,
+                /* .no_ooae      = */ params.no_ooae,
+                /* .mqkv         = */ params.mqkv,
+                /* .rcache       = */ params.rcache,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -966,12 +1050,17 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .attn_max_b   = */ amb,
                 /* .ser          = */ ser,
                 /* .tensor_split = */ ts,
+                /* .cuda_params  = */ params.cuda_params,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
+                /* .ger          = */ params.ger,
                 /* .no_fug       = */ params.no_fug,
                 /* .use_thp      = */ params.use_thp,
+                /* .no_ooae      = */ params.no_ooae,
+                /* .mqkv         = */ params.mqkv,
+                /* .rcache       = */ params.rcache,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1001,12 +1090,17 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .attn_max_b   = */ amb,
                 /* .ser          = */ ser,
                 /* .tensor_split = */ ts,
+                /* .cuda_params  = */ params.cuda_params,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
+                /* .ger          = */ params.ger,
                 /* .no_fug       = */ params.no_fug,
                 /* .use_thp      = */ params.use_thp,
+                /* .no_ooae      = */ params.no_ooae,
+                /* .mqkv         = */ params.mqkv,
+                /* .rcache       = */ params.rcache,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1036,12 +1130,17 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .attn_max_b   = */ amb,
                 /* .ser          = */ ser,
                 /* .tensor_split = */ ts,
+                /* .cuda_params  = */ params.cuda_params,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
+                /* .ger          = */ params.ger,
                 /* .no_fug       = */ params.no_fug,
                 /* .use_thp      = */ params.use_thp,
+                /* .no_ooae      = */ params.no_ooae,
+                /* .mqkv         = */ params.mqkv,
+                /* .rcache       = */ params.rcache,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1082,12 +1181,17 @@ struct test {
     int  attn_max_batch;
     Ser  ser;
     std::vector<float> tensor_split;
+    std::string cuda_params;
     bool use_mmap;
     bool embeddings;
     bool repack = false;
     bool fmoe = false;
+    bool ger = false;
     bool no_fug = false;
     bool use_thp = false;
+    bool no_ooae = false;
+    bool mqkv = false;
+    bool rcache = false;
     int n_prompt;
     int n_gen;
     std::string test_time;
@@ -1117,11 +1221,17 @@ struct test {
         attn_max_batch = inst.attn_max_batch;
         ser = inst.ser;
         tensor_split = inst.tensor_split;
+        cuda_params = inst.cuda_params;
         use_mmap = inst.use_mmap;
         embeddings = inst.embeddings;
         repack = inst.repack;
+        mqkv = inst.mqkv;
+        fmoe = inst.fmoe;
+        ger = inst.ger;
+        rcache = inst.rcache;
         no_fug = inst.no_fug;
         use_thp = inst.use_thp;
+        no_ooae = inst.no_ooae;
         n_prompt = inst.n_prompt;
         n_gen = inst.n_gen;
         test_kind = inst.test_kind;
@@ -1212,7 +1322,8 @@ struct test {
             "n_threads", "type_k", "type_v",
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser",
-            "tensor_split", "use_mmap", "embeddings", "repack", "fused_moe", "fused_up_gate", "use_thp",
+            "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "fused_moe", "grouped_er",
+            "fused_up_gate", "use_thp", "ooae", "rcache",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
             "avg_ts", "stddev_ts", "test",
@@ -1234,7 +1345,8 @@ struct test {
         if (field == "cuda" || field == "vulkan" || field == "kompute" || field == "metal" ||
             field == "gpu_blas" || field == "blas" || field == "sycl" ||field == "f16_kv" || field == "no_kv_offload" ||
             field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
-            field == "fused_moe" || field == "fused_up_gate") {
+            field == "fused_moe" || field == "grouped_er" || field == "fused_up_gate" || field == "ooae" || field == "mqkv" ||
+            field == "rcache") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1277,7 +1389,8 @@ struct test {
             std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn),
             std::to_string(mla_attn), std::to_string(attn_max_batch), ser_to_string(ser),
             tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
-            std::to_string(repack), std::to_string(fmoe), std::to_string(no_fug), std::to_string(use_thp),
+            std::to_string(repack), std::to_string(fmoe), std::to_string(ger), std::to_string(rcache),
+            std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(mqkv),
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
             std::to_string(avg_ts()), std::to_string(stdev_ts()),
@@ -1455,14 +1568,26 @@ struct markdown_printer : public printer {
         if (field == "repack") {
             return 3;
         }
+        if (field == "mqkv") {
+            return 4;
+        }
         if (field == "use_thp") {
             return 3;
         }
         if (field == "fused_moe") {
             return 4;
         }
+        if (field == "grouped_er") {
+            return 3;
+        }
+        if (field == "rcache") {
+            return 6;
+        }
         if (field == "fused_up_gate") {
             return 6;
+        }
+        if (field == "ooae") {
+            return 7;
         }
         if (field == "test") {
             return 13;
@@ -1507,14 +1632,26 @@ struct markdown_printer : public printer {
         if (field == "repack") {
             return "rtr";
         }
+        if (field == "mqkv") {
+            return "mqkv";
+        }
         if (field == "use_thp") {
             return "thp";
         }
         if (field == "fused_moe") {
             return "fmoe";
         }
+        if (field == "grouped_er") {
+            return "ger";
+        }
+        if (field == "rcache") {
+            return "rcache";
+        }
         if (field == "fused_up_gate") {
             return "no-fug";
+        }
+        if (field == "ooae") {
+            return "no-ooae";
         }
         if (field == "embeddings") {
             return "embd";
@@ -1583,14 +1720,26 @@ struct markdown_printer : public printer {
         if (params.repack != cmd_params_defaults.repack) {
             fields.emplace_back("repack");
         }
+        if (params.mqkv != cmd_params_defaults.mqkv) {
+            fields.emplace_back("mqkv");
+        }
         if (params.use_thp != cmd_params_defaults.use_thp) {
             fields.emplace_back("use_thp");
         }
         if (params.fmoe != cmd_params_defaults.fmoe) {
             fields.emplace_back("fused_moe");
         }
+        if (params.ger != cmd_params_defaults.ger) {
+            fields.emplace_back("grouped_er");
+        }
+        if (params.rcache != cmd_params_defaults.rcache) {
+            fields.emplace_back("rcache");
+        }
         if (params.no_fug != cmd_params_defaults.no_fug) {
             fields.emplace_back("fused_up_gate");
+        }
+        if (params.no_ooae != cmd_params_defaults.no_ooae) {
+            fields.emplace_back("ooae");
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");

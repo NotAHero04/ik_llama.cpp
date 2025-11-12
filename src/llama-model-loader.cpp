@@ -1,6 +1,7 @@
 #include "llama-model-loader.h"
 #include "llama-impl.h"
 #include "llama-mmap.h"
+#include "llama-model.h"
 #include "ggml.h"
 //#include "ggml-backend.h"
 
@@ -20,6 +21,7 @@
 #include <map>
 #include <array>
 #include <future>
+#include <regex>
 
 #if defined(_WIN32)
     #define WIN32_LEAN_AND_MEAN
@@ -201,9 +203,10 @@ namespace GGUFMeta {
     };
 }
 
-llama_model_loader::llama_model_loader(const std::string & fname, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp,
-            const llama_model_kv_override * param_overrides_p,
-            const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
+llama_model_loader::llama_model_loader(const std::string & fname, bool use_mmap, bool check_tensors,
+        bool repack_tensors, bool use_thp, bool merge_qkv,
+        const llama_model_kv_override * param_overrides_p,
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -493,6 +496,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, bool use_mmap,
     this->check_tensors = check_tensors;
     this->repack_tensors = repack_tensors;
     this->use_thp = use_thp;
+    this->merge_qkv = merge_qkv;
 }
 
 llama_model_loader::~llama_model_loader() {
@@ -903,7 +907,7 @@ bool llama_model_loader::load_all_data(
             for (int i = 0; i < ggml_backend_cuda_get_device_count(); ++i) {
                 auto * cuda_buffer_type = ggml_backend_cuda_buffer_type(i);
                 if (buffer_type == cuda_buffer_type) {
-                    cuda_backend = ggml_backend_cuda_init(i);
+                    cuda_backend = ggml_backend_cuda_init(i, nullptr);
                     break;
                 }
             }
@@ -1080,3 +1084,4 @@ template bool llama_model_loader::get_key_or_arr<std::array<int, 4>>(enum llm_kv
 template bool llama_model_loader::get_key_or_arr<std::array<uint32_t, 512>>(enum llm_kv kid, std::array<uint32_t, 512> & result, uint32_t n, bool required);
 
 template std::enable_if<std::is_integral<unsigned int>::value, bool>::type llama_model_loader::get_arr_n<unsigned int>(enum llm_kv, unsigned int&, bool);
+

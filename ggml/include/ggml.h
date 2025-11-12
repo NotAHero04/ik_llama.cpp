@@ -259,6 +259,7 @@
 #define GGML_ROPE_TYPE_NEOX   2
 #define GGML_ROPE_TYPE_MROPE  8
 #define GGML_ROPE_TYPE_VISION 24
+#define GGML_ROPE_TYPE_IMROPE 40 // binary: 101000
 
 #define GGML_MROPE_SECTIONS   4
 
@@ -619,6 +620,7 @@ extern "C" {
         GGML_OP_OUT_PROD,
         GGML_OP_FUSED_UP_GATE,
         GGML_OP_MOE_FUSED_UP_GATE,
+        GGML_OP_MUL_MULTI_ADD,
 
         GGML_OP_SCALE,
         GGML_OP_SET,
@@ -630,6 +632,7 @@ extern "C" {
         GGML_OP_TRANSPOSE,
         GGML_OP_GET_ROWS,
         GGML_OP_GET_ROWS_BACK,
+        GGML_OP_SET_ROWS,
         GGML_OP_DIAG,
         GGML_OP_DIAG_MASK_INF,
         GGML_OP_DIAG_MASK_ZERO,
@@ -637,6 +640,8 @@ extern "C" {
         GGML_OP_SOFT_MAX_BACK,
         GGML_OP_ROPE,
         GGML_OP_ROPE_BACK,
+        GGML_OP_ROPE_CACHE,
+        GGML_OP_ROPE_FAST,
         GGML_OP_CLAMP,
         GGML_OP_CONV_TRANSPOSE_1D,
         GGML_OP_IM2COL,
@@ -649,6 +654,7 @@ extern "C" {
         GGML_OP_TIMESTEP_EMBEDDING,
         GGML_OP_ARGSORT,
         GGML_OP_ARGSORT_THRESH,
+        GGML_OP_GROUPED_TOPK,
         GGML_OP_LEAKY_RELU,
         GGML_OP_SOFTCAP,
         GGML_OP_SOFT_CAP_MAX,
@@ -1080,6 +1086,11 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int n_experts);
+
+    GGML_API struct ggml_tensor * ggml_mul_multi_add(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
 
     // dst = a
     // view(dst, nb1, nb2, nb3, offset) += b
@@ -1559,6 +1570,19 @@ extern "C" {
             struct ggml_tensor  * a,
             float                 s);
 
+    // x = s * a + b
+    GGML_API struct ggml_tensor * ggml_scale_bias(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float                 s,
+        float                 b);
+
+    GGML_API struct ggml_tensor * ggml_scale_bias_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float                 s,
+        float                 b);
+
     GGML_API struct ggml_tensor * ggml_softcap(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1781,6 +1805,23 @@ extern "C" {
             struct ggml_tensor  * b,
             struct ggml_tensor  * c);
 
+    // a TD  [n_embd, ne1,    ne2,    ne3]
+    // b TS  [n_embd, n_rows, ne02,   ne03] | ne02 == ne2, ne03 == ne3
+    // c I64 [n_rows, ne11,   ne12,   1]    | c[i] in [0, ne1)
+    //
+    // undefined behavior if destination rows overlap
+    //
+    // broadcast:
+    //   ne2 % ne11 == 0
+    //   ne3 % ne12 == 0
+    //
+    // return view(a)
+    GGML_API struct ggml_tensor * ggml_set_rows(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,  // destination
+            struct ggml_tensor  * b,  // source
+            struct ggml_tensor  * c); // row indices
+
     GGML_API struct ggml_tensor * ggml_diag(
         struct ggml_context     * ctx,
         struct ggml_tensor      * a);
@@ -1981,6 +2022,26 @@ extern "C" {
             float                 attn_factor,
             float                 beta_fast,
             float                 beta_slow);
+
+    GGML_API struct ggml_tensor * ggml_rope_cache(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * c,
+            int                   ne0,
+            int                   n_dims,
+            int                   mode,
+            int                   n_ctx_orig,
+            float                 freq_base,
+            float                 freq_scale,
+            float                 ext_factor,
+            float                 attn_factor,
+            float                 beta_fast,
+            float                 beta_slow);
+
+    GGML_API struct ggml_tensor * ggml_rope_fast(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
 
     // clamp
     // in-place, returns view(a)
@@ -2234,8 +2295,15 @@ extern "C" {
             int                   k,
             int                   min_entries,
             float                 thresh);
+    GGML_API struct ggml_tensor * ggml_grouped_topk(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   num_groups,
+            int                   num_top_groups,
+            int                   nk,
+            int                   topk_experts);
 
-#define GGML_KQ_MASK_PAD 64
+#define GGML_KQ_MASK_PAD 16
 
     // q:    [n_embd, n_batch,     n_head,    1]
     // k:    [n_embd, n_kv,        n_head_kv, 1]

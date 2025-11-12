@@ -88,6 +88,8 @@ class Keys:
         EXPERT_COUNT                      = "{arch}.expert_count"
         EXPERT_USED_COUNT                 = "{arch}.expert_used_count"
         EXPERT_SHARED_COUNT               = "{arch}.expert_shared_count"
+        EXPERT_GROUP_COUNT                = "{arch}.expert_group_count"
+        EXPERT_GROUP_USED_COUNT           = "{arch}.expert_group_used_count"
         EXPERT_WEIGHTS_SCALE              = "{arch}.expert_weights_scale"
         EXPERT_WEIGHTS_NORM               = "{arch}.expert_weights_norm"
         EXPERT_GATING_FUNC                = "{arch}.expert_gating_func"
@@ -245,6 +247,9 @@ class MODEL_ARCH(IntEnum):
     DOTS1        = auto()
     ERNIE4_5     = auto()
     ERNIE4_5_MOE = auto()
+    BAILINGMOE2  = auto()
+    MINIMAXM2    = auto()
+    SMOLLM3      = auto()
 
 class MODEL_TENSOR(IntEnum):
     TOKEN_EMBD           = auto()
@@ -381,7 +386,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.ARCTIC:         "arctic",
     MODEL_ARCH.DEEPSEEK2:      "deepseek2",
     MODEL_ARCH.CHATGLM:        "chatglm",
-    MODEL_ARCH.GLM4_MOE:         "glm4moe",
+    MODEL_ARCH.GLM4_MOE:       "glm4moe",
     MODEL_ARCH.BITNET:         "bitnet",
     MODEL_ARCH.BITNET_25:      "bitnet-25",
     MODEL_ARCH.T5:             "t5",
@@ -390,6 +395,9 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.DOTS1:          "dots1",
     MODEL_ARCH.ERNIE4_5:       "ernie4_5",
     MODEL_ARCH.ERNIE4_5_MOE:   "ernie4_5-moe",
+    MODEL_ARCH.BAILINGMOE2:    "bailingmoe2",
+    MODEL_ARCH.MINIMAXM2:      "minimax-m2",
+    MODEL_ARCH.SMOLLM3:        "smollm3",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -1290,6 +1298,69 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
+    ],
+    MODEL_ARCH.BAILINGMOE2: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+        MODEL_TENSOR.LAYER_OUT_NORM,
+    ],
+    MODEL_ARCH.MINIMAXM2: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+    ],
+    MODEL_ARCH.SMOLLM3: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
     ],
     # TODO
 }

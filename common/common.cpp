@@ -88,6 +88,41 @@
 using json = nlohmann::ordered_json;
 
 //
+// Environment variable utils
+//
+
+template<typename T>
+static typename std::enable_if<std::is_same<T, std::string>::value, void>::type
+get_env(std::string name, T & target) {
+    char * value = std::getenv(name.c_str());
+    target = value ? std::string(value) : target;
+}
+
+template<typename T>
+static typename std::enable_if<!std::is_same<T, bool>::value && std::is_integral<T>::value, void>::type
+get_env(std::string name, T & target) {
+    char * value = std::getenv(name.c_str());
+    target = value ? std::stoi(value) : target;
+}
+
+template<typename T>
+static typename std::enable_if<std::is_floating_point<T>::value, void>::type
+get_env(std::string name, T & target) {
+    char * value = std::getenv(name.c_str());
+    target = value ? std::stof(value) : target;
+}
+
+template<typename T>
+static typename std::enable_if<std::is_same<T, bool>::value, void>::type
+get_env(std::string name, T & target) {
+    char * value = std::getenv(name.c_str());
+    if (value) {
+        std::string val(value);
+        target = val == "1" || val == "true";
+    }
+}
+
+//
 // CPU utils
 //
 
@@ -200,6 +235,23 @@ int32_t cpu_get_num_math() {
     return cpu_get_num_physical_cores();
 }
 
+//
+// Arg utils
+//
+common_webui common_webui_from_name(const std::string& format) {
+    if (format == "none") {
+        return COMMON_WEBUI_NONE;
+    }
+    else if (format == "auto") {
+        return COMMON_WEBUI_AUTO;
+    }
+    else if (format == "llamacpp") {
+        return COMMON_WEBUI_LLAMACPP;
+    }
+    else {
+        return COMMON_WEBUI_AUTO;
+    }
+}
 
 static std::string read_file(const std::string& fname) {
     std::ifstream file(fname);
@@ -210,15 +262,72 @@ static std::string read_file(const std::string& fname) {
     file.close();
     return content;
 }
+
+static std::string parse_device_list(const std::string& value) {
+    if (value==" " || value.find("-")!= std::string::npos) {
+        throw std::invalid_argument("no devices specified");
+    }
+    return value;
+}
+
+
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string& url, const common_remote_params&) {
+    if (!url.empty()) {
+        throw std::runtime_error("error: built without CURL, cannot download file from the internet");
+    }
+    return {};
+}
+
 //
 // CLI argument parsing
 //
 
-void gpt_params_handle_hf_token(gpt_params & params) {
-    if (params.hf_token.empty() && std::getenv("HF_TOKEN")) {
-        params.hf_token = std::getenv("HF_TOKEN");
+std::pair<int, char**> parse_command_line(const std::string& commandLine) {
+    std::vector<std::string> tokens;
+    std::string current;
+    bool inQuotes = false;
+
+    for (size_t i = 0; i < commandLine.length(); i++) {
+        char c = commandLine[i];
+
+        if (c == '\"') {
+            inQuotes = !inQuotes;
+        }
+        else if (c == ' ' && !inQuotes) {
+            if (!current.empty()) {
+                tokens.push_back(current);
+                current.clear();
+            }
+        }
+        else {
+            current += c;
+        }
     }
+
+    if (!current.empty()) {
+        tokens.push_back(current);
+    }
+
+    int argc = static_cast<int>(tokens.size());
+    char** argv = new char* [static_cast<size_t>(argc) + 1];
+
+    for (int i = 0; i < argc; i++) {
+        argv[i] = new char[tokens[i].length() + 1];
+        std::strcpy(argv[i], tokens[i].c_str());
+    }
+    argv[argc] = nullptr;
+    return { argc, argv };
 }
+
+void free_command_line(int argc, char** argv) {
+    if (argv == nullptr) return;
+
+    for (int i = 0; i < argc; i++) {
+        delete[] argv[i];
+    }
+    delete[] argv;
+}
+
 
 void gpt_params_handle_model_default(gpt_params & params) {
     if (!params.hf_repo.empty()) {
@@ -267,7 +376,9 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
 
     gpt_params_handle_model_default(params);
 
-    gpt_params_handle_hf_token(params);
+    if (params.hf_token.empty()) {
+        get_env("HF_TOKEN", params.hf_token);
+    }
 
     if (params.escape) {
         if (!params.prompt_is_binary) {
@@ -302,6 +413,32 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
         ));
     }
     return true;
+}
+
+void gpt_params_parse_from_env(gpt_params & params) {
+    // we only care about server-related params for now
+    get_env("LLAMA_ARG_MODEL",            params.model);
+    get_env("LLAMA_ARG_MODEL_URL",        params.model_url);
+    get_env("LLAMA_ARG_MODEL_ALIAS",      params.model_alias);
+    get_env("LLAMA_ARG_HF_REPO",          params.hf_repo);
+    get_env("LLAMA_ARG_HF_FILE",          params.hf_file);
+    get_env("LLAMA_ARG_THREADS",          params.n_threads);
+    get_env("LLAMA_ARG_CTX_SIZE",         params.n_ctx);
+    get_env("LLAMA_ARG_N_PARALLEL",       params.n_parallel);
+    get_env("LLAMA_ARG_BATCH",            params.n_batch);
+    get_env("LLAMA_ARG_UBATCH",           params.n_ubatch);
+    get_env("LLAMA_ARG_N_GPU_LAYERS",     params.n_gpu_layers);
+    get_env("LLAMA_ARG_THREADS_HTTP",     params.n_threads_http);
+    get_env("LLAMA_ARG_CHAT_TEMPLATE",    params.chat_template);
+    get_env("LLAMA_ARG_N_PREDICT",        params.n_predict);
+    get_env("LLAMA_ARG_ENDPOINT_METRICS", params.endpoint_metrics);
+    get_env("LLAMA_ARG_ENDPOINT_SLOTS",   params.endpoint_slots);
+    get_env("LLAMA_ARG_EMBEDDINGS",       params.embedding);
+    get_env("LLAMA_ARG_FLASH_ATTN",       params.flash_attn);
+    get_env("LLAMA_ARG_DEFRAG_THOLD",     params.defrag_thold);
+    get_env("LLAMA_ARG_CONT_BATCHING",    params.cont_batching);
+    get_env("LLAMA_ARG_HOST",             params.hostname);
+    get_env("LLAMA_ARG_PORT",             params.port);
 }
 
 bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
@@ -728,9 +865,9 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             params.sparams.dry_sequence_breakers.clear();
         }
         else {
-            for (size_t i; i < value.size(); i++)
+            for (size_t i = 0; i < value.size(); i++)
             {
-                params.sparams.dry_sequence_breakers.emplace_back(""+value[i]);
+                params.sparams.dry_sequence_breakers.emplace_back(std::string{}+value[i]);
             }
         }
         return true;
@@ -994,8 +1131,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cont_batching = false;
         return true;
     }
-    if (arg == "-fa" || arg == "--flash-attn") {
-        params.flash_attn = true;
+    if (arg == "-no-fa" || arg == "--no-flash-attn") {
+        params.flash_attn = false;
         return true;
     }
     if (arg == "-mla" || arg == "--mla-use") {
@@ -1008,12 +1145,24 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.attn_max_batch = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "-fmoe" || arg == "--fused-moe") {
-        params.fused_moe_up_gate = true;
+    if (arg == "-no-fmoe" || arg == "--no-fused-moe") {
+        params.fused_moe_up_gate = false;
+        return true;
+    }
+    if (arg == "-ger" || arg == "--grouped-expert-routing") {
+        params.grouped_expert_routing = true;
         return true;
     }
     if (arg == "-no-fug" || arg == "--no-fused-up-gate") {
         params.fused_up_gate = false;
+        return true;
+    }
+    if (arg == "-no-mmad" || arg == "--no-fused-mul-multiadd") {
+        params.fused_mmad = false;
+        return true;
+    }
+    if (arg == "-rcache" || arg == "--rope-cache") {
+        params.rope_cache = true;
         return true;
     }
     if (arg == "-ser" || arg == "--smart-expert-reduction") {
@@ -1044,7 +1193,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
-    if (arg == "-ngld" || arg == "--gpu-layers-draft" || arg == "--gpu-layers-draft") {
+    if (arg == "-ngld" || arg == "--gpu-layers-draft" || arg == "--n-gpu-layers-draft") {
         CHECK_ARG
         params.n_gpu_layers_draft = std::stoi(argv[i]);
         if (!llama_supports_gpu_offload()) {
@@ -1147,8 +1296,18 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "-cuda" || arg == "--cuda-params") {
+        CHECK_ARG
+        params.cuda_params = argv[i];
+        return true;
+    }
+    if (arg == "-draft" || arg == "--draft-params") {
+        CHECK_ARG
+        params.draft_params = argv[i];
+        return true;
+    }
     if (arg == "--cpu-moe" || arg == "-cmoe") {
-        params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate)_exps"), ggml_backend_cpu_buffer_type()});
+        params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate)_exps\\.weight"), ggml_backend_cpu_buffer_type()});
         return true;
     }
     if (arg == "--n-cpu-moe" || arg == "-ncmoe") {
@@ -1160,7 +1319,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             return true;
         }
         for (int32_t l = 0; l < n_layers; ++l) {
-            std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate)_exps)";
+            std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate)_exps\\.weight)";
             params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
         }
         return true;
@@ -1182,6 +1341,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.validate_quants = true;
         return true;
     }
+    if (arg == "-mqkv" || arg == "--merge-qkv") {
+        params.merge_qkv = true;
+        return true;
+    }
     if (arg == "--numa") {
         CHECK_ARG
         std::string value(argv[i]);
@@ -1189,6 +1352,18 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         else if (value == "isolate") { params.numa = GGML_NUMA_STRATEGY_ISOLATE; }
         else if (value == "numactl") { params.numa = GGML_NUMA_STRATEGY_NUMACTL; }
         else { invalid_param = true; }
+        return true;
+    }
+    if (arg == "-dev" || arg == "--device") {
+        CHECK_ARG
+        std::string value(argv[i]);
+        params.devices = parse_device_list(value);
+        return true;
+    }
+    if (arg == "-devd" || arg == "--device-draft") {
+        CHECK_ARG
+        std::string value(argv[i]);
+        params.devices_draft = parse_device_list(value);
         return true;
     }
     if (arg == "-v" || arg == "--verbose") {
@@ -1386,8 +1561,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
-    if (arg == "--offload-only-active-experts" || arg == "-ooae") {
-        params.only_active_exps = true;
+    if (arg == "--no-offload-only-active-experts" || arg == "-no-ooae") {
+        params.only_active_exps = false;
         return true;
     }
     if (arg == "--host") {
@@ -1407,6 +1582,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--path") {
         CHECK_ARG
         params.public_path = argv[i];
+        return true;
+    }
+    if (arg == "--webui") {
+        CHECK_ARG
+        params.webui = common_webui_from_name(std::string(argv[i]));
         return true;
     }
     if (arg == "--api-key") {
@@ -1612,6 +1792,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.n_junk = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "--no-context-shift") {
+        params.ctx_shift = false;
+        return true;
+    }
     if (arg == "--pos") {
         CHECK_ARG
         params.i_pos = std::stoi(argv[i]);
@@ -1796,12 +1980,16 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-ub,   --ubatch-size N",        "physical maximum batch size (default: %d)", params.n_ubatch });
     options.push_back({ "*",           "       --keep N",               "number of tokens to keep from the initial prompt (default: %d, -1 = all)", params.n_keep });
     options.push_back({ "*",           "       --chunks N",             "max number of chunks to process (default: %d, -1 = all)", params.n_chunks });
-    options.push_back({ "*",           "-fa,   --flash-attn",           "enable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-no-fa, --no-flash-attn",       "disable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled" });
     options.push_back({ "*",           "-mla,  --mla-use",              "enable MLA (default: %d)", params.mla_attn });
     options.push_back({ "*",           "-amb,  --attention-max-batch",  "max batch size for attention computations (default: %d)", params.attn_max_batch});
-    options.push_back({ "*",           "-fmoe, --fused-moe",            "enable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-no-fmoe, --no-fused-moe",      "disable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-ger,  --grouped-expert-routing", "enable grouped expert routing (default: %s)", params.grouped_expert_routing ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-fug, --no-fused-up-gate",   "disaable fused up-gate (default: %s)", params.fused_up_gate ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-no-mmad, --no-fused-mul-multiadd", "disaable fused mul-multi_add (default: %s)", params.fused_mmad? "enabled" : "disabled" });
+    options.push_back({ "*",           "-rcache, --rope-cache",         "enable RoPE cache (default: %s)", params.rope_cache ? "enabled" : "disabled" });
     options.push_back({ "*",         "-ser,  --smart-expert-reduction,","experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
+    options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
                                                                         "in conversation mode, this will be used as system prompt\n"
                                                                         "(default: '%s')", params.prompt.c_str() });
@@ -1878,6 +2066,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                  "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
                         "- none: leaves thoughts unparsed in `message.content`\n"
                         "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
+                        "- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`\n"
                         "(default: none)", });
     options.push_back({ "main",      "       --chat-template-kwargs JSON",  "sets additional params for the json template parser"});
     options.push_back({ "main",      "       --reasoning-budget N",  "controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)" });
@@ -1940,10 +2129,11 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "multi-modality" });
     options.push_back({ "*",           "       --mmproj FILE",          "path to a multimodal projector file for LLaVA. see examples/llava/README.md" });
     options.push_back({ "*",           "       --image FILE",           "path to an image file. use with multimodal models. Specify multiple times for batching" });
-
+    options.push_back({ "*",           "       --no-context-shift",           "disable context-shift." });
     options.push_back({ "backend" });
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
-
+    options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
+    options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
     }
@@ -1972,6 +2162,12 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "  - row: split rows across GPUs" });
         options.push_back({ "*",           "-ts,   --tensor-split SPLIT",
                                                                         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1" });
+        options.push_back({ "*",           "-dev,   --device dev1,dev2",
+                                                                         "comma-separated list of devices to use for offloading (none = don't offload)\n"
+                                                                         "Example: CUDA0,CUDA1,RPC[192.168.0.1:8080]\n" });
+        options.push_back({ "*",           "-devd,   --device-draft dev1,dev2",
+                                                                         "comma-separated list of devices to use for offloading for the draft model (none = don't offload)\n"
+                                                                         "Example: CUDA0,CUDA1,RPC[192.168.0.1:8080]\n" });
         options.push_back({ "*",           "-mg,   --main-gpu i",       "the GPU to use for the model (with split-mode = none),\n"
                                                                         "or for intermediate results and KV (with split-mode = row) (default: %d)", params.main_gpu });
     }
@@ -2036,6 +2232,12 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "server",      "       --port PORT",            "port to listen (default: %d)", params.port });
     options.push_back({ "server",      "       --path PATH",            "path to serve static files from (default: %s)", params.public_path.c_str() });
     options.push_back({ "server",      "       --embedding(s)",         "restrict to only support embedding use case; use only with dedicated embedding models (default: %s)", params.embedding ? "enabled" : "disabled" });
+    options.push_back({ "server",        "       --webui NAME",
+                                                             "controls which webui to server:\n"
+                                                            "- none: disable webui\n"
+                                                            "- auto: default webui \n"
+                                                            "- llamacpp: llamacpp webui \n"
+                                                            "(default: auto)", });
     options.push_back({ "server",      "       --api-key KEY",          "API key to use for authentication (default: none)" });
     options.push_back({ "server",      "       --api-key-file FNAME",   "path to file containing API keys (default: none)" });
     options.push_back({ "server",      "       --ssl-key-file FNAME",   "path to file a PEM-encoded SSL private key" });
@@ -2656,6 +2858,7 @@ void llama_lora_adapters_apply(struct llama_context * ctx, std::vector<llama_lor
 
 struct llama_model_params llama_model_params_from_gpt_params(const gpt_params & params) {
     auto mparams = llama_model_default_params();
+    mparams.devices = params.devices.c_str();
 
     if (params.n_gpu_layers != -1) {
         mparams.n_gpu_layers = params.n_gpu_layers;
@@ -2671,6 +2874,7 @@ struct llama_model_params llama_model_params_from_gpt_params(const gpt_params & 
     mparams.repack_tensors  = params.repack_tensors;
     mparams.use_thp         = params.use_thp;
     mparams.validate_quants = params.validate_quants;
+    mparams.merge_qkv       = params.merge_qkv;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
@@ -2755,7 +2959,10 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
     cparams.mla_attn          = params.mla_attn;
     cparams.attn_max_batch    = params.attn_max_batch;
     cparams.fused_moe_up_gate = params.fused_moe_up_gate;
+    cparams.grouped_expert_routing = params.grouped_expert_routing;
     cparams.fused_up_gate     = params.fused_up_gate;
+    cparams.fused_mmad        = params.fused_mmad;
+    cparams.rope_cache        = params.rope_cache;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
     cparams.only_active_experts = params.only_active_exps;
@@ -2764,6 +2971,7 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
 
     if (!params.offload_policy.empty()) cparams.offload_policy = (void *)&params.offload_policy;
+    if (!params.cuda_params.empty()) cparams.cuda_params = (void *)params.cuda_params.data();
 
     return cparams;
 }
@@ -3174,6 +3382,29 @@ std::vector<llama_token> llama_tokenize(
     return result;
 }
 
+std::vector<llama_token> llama_tokenize(
+    const struct llama_vocab* vocab,
+    const std::string& text,
+    bool   add_special,
+    bool   parse_special) {
+    // upper limit for the number of tokens
+    int n_tokens = text.length() + 2 * add_special;
+    std::vector<llama_token> result(n_tokens);
+    n_tokens = llama_vocab_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
+    if (n_tokens == std::numeric_limits<int32_t>::min()) {
+        throw std::runtime_error("Tokenization failed: input text too large, tokenization result exceeds int32_t limit");
+    }
+    if (n_tokens < 0) {
+        result.resize(-n_tokens);
+        int check = llama_vocab_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
+        GGML_ASSERT(check == -n_tokens);
+    }
+    else {
+        result.resize(n_tokens);
+    }
+    return result;
+}
+
 std::string llama_token_to_piece(const struct llama_context * ctx, llama_token token, bool special) {
     std::string piece;
     piece.resize(piece.capacity());  // using string internal cache, 15 bytes + '\n'
@@ -3206,7 +3437,7 @@ std::string llama_token_to_piece(const struct llama_model* model, llama_token to
     return piece;
 }
 
-std::string llama_detokenize(llama_context * ctx, const std::vector<llama_token> & tokens, bool special) {
+std::string llama_detokenize(const llama_context * ctx, const std::vector<llama_token> & tokens, bool special) {
     std::string text;
     text.resize(std::max(text.capacity(), tokens.size()));
     int32_t n_chars = llama_detokenize(llama_get_model(ctx), tokens.data(), (int32_t)tokens.size(), &text[0], (int32_t)text.size(), false, special);
@@ -3221,6 +3452,7 @@ std::string llama_detokenize(llama_context * ctx, const std::vector<llama_token>
     // NOTE: the original tokenizer decodes bytes after collecting the pieces.
     return text;
 }
+
 
 bool llama_should_add_bos_token(const llama_model * model) {
     const int add_bos = llama_add_bos_token(model);
@@ -3840,6 +4072,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "repack: %s # default: false\n", params.repack_tensors ? "true" : "false");
     fprintf(stream, "use_thp: %s # default: false\n", params.use_thp ? "true" : "false");
     fprintf(stream, "validate_quants: %s # default: false\n", params.validate_quants ? "true" : "false");
+    fprintf(stream, "merge_qkv: %s # default: false\n", params.merge_qkv ? "true" : "false");
     fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
     fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);
     fprintf(stream, "ppl_stride: %d # default: 0\n", params.ppl_stride);
@@ -3871,7 +4104,10 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "mla_attn: %d # default: 0\n", params.mla_attn);
     fprintf(stream, "attn_max_batch: %d # default: 0\n", params.attn_max_batch);
     fprintf(stream, "fused_moe: %s # default: false\n", params.fused_moe_up_gate ? "true" : "false");
+    fprintf(stream, "grouped_expert_routing: %s # default: false\n", params.grouped_expert_routing ? "true" : "false");
     fprintf(stream, "fused_up_gate: %s # default: true\n", params.fused_up_gate ? "true" : "false");
+    fprintf(stream, "fused_mmad: %s # default: true\n", params.fused_mmad ? "true" : "false");
+    fprintf(stream, "rope_cache: %s # default: true\n", params.rope_cache ? "true" : "false");
     fprintf(stream, "ser: %d,%g # defaulr: -1,0\n", params.min_experts, params.thresh_experts);
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
 

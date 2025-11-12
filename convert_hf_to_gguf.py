@@ -654,7 +654,12 @@ class Model:
         if chkhsh == "81212dc7cdb7e0c1074ca62c5aeab0d43c9f52b8a737be7b12a777c953027890":
             # ref: https://huggingface.co/moonshotai/Kimi-K2-Base
             res = "kimi-k2"
-
+        if chkhsh == "9b1be57e70d20d9501b2b3186e792d81181ae36ada3903c26f9fea418cf87206":
+            # ref: https://huggingface.co/inclusionAI/Ling-mini-base-2.0
+            res = "bailingmoe2"
+        if chkhsh == "f4f37b6c8eb9ea29b3eac6bb8c8487c5ab7885f8d8022e67edc1c68ce8403e95":
+            # ref: https://huggingface.co/MiniMaxAI/MiniMax-M2
+            res = "minimax-m2"
         if res is None:
             logger.warning("\n")
             logger.warning("**************************************************************************************")
@@ -4119,6 +4124,78 @@ class JaisModel(Model):
         super().prepare_tensors()
         self.gguf_writer.add_max_alibi_bias(self.max_alibi_bias)
 
+@Model.register("MiniMaxM2ForCausalLM")
+class MiniMaxM2Model(Model):
+    model_arch = gguf.MODEL_ARCH.MINIMAXM2
+    _experts_cache: dict[int, dict[str, Tensor]] = {}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hparams["num_experts"] = self.hparams["num_local_experts"]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if self.hparams["scoring_func"] == "sigmoid":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        elif self.hparams["scoring_func"] == "softmax":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
+        else:
+            raise ValueError(f"Unsupported scoring_func value: {self.hparams['scoring_func']}")
+
+        self.gguf_writer.add_expert_feed_forward_length(self.find_hparam(["intermediate_size"]))
+        self.gguf_writer.add_rope_dimension_count(self.find_hparam(["rotary_dim"]))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        if name.endswith("e_score_correction_bias"):
+            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
+
+        # merge expert weights
+        if 'experts' in name:
+            n_experts = self.hparams["num_experts"]
+            assert bid is not None
+
+            expert_cache = self._experts_cache.setdefault(bid, {})
+            expert_cache[name] = data_torch
+            expert_weights = ["w1", "w2", "w3"]
+
+            # not enough expert weights to merge
+            if len(expert_cache) < n_experts * len(expert_weights):
+                return []
+
+            tensors: list[tuple[str, Tensor]] = []
+            for w_name in expert_weights:
+                datas: list[Tensor] = []
+
+                for xid in range(n_experts):
+                    ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{w_name}.weight"
+                    datas.append(expert_cache[ename])
+                    del expert_cache[ename]
+
+                data_torch = torch.stack(datas, dim=0)
+                merged_name = f"model.layers.{bid}.block_sparse_moe.experts.{w_name}.weight"
+                new_name = self.map_tensor_name(merged_name)
+                tensors.append((new_name, data_torch))
+
+            del self._experts_cache[bid]
+            return tensors
+
+        return super().modify_tensors(data_torch, name, bid)
+
+
+@Model.register("SmolLM3ForCausalLM")
+class SmolLM3Model(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.SMOLLM3
+
+    def set_vocab(self):
+        super().set_vocab()
+        # remove unsupported array slicing in chat template
+        # ref: https://huggingface.co/ggml-org/SmolLM3-3B-GGUF/discussions/1
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        if tokenizer.chat_template is not None:
+            chat_template = tokenizer.chat_template.replace("[:]", "")
+            self.gguf_writer.add_chat_template(chat_template)
+
 
 @Model.register("Dots1ForCausalLM")
 class Dots1Model(Qwen2MoeModel):
@@ -4146,6 +4223,7 @@ class Dots1Model(Qwen2MoeModel):
         if "shared_experts" in name:
             return [(self.map_tensor_name(name), data_torch)]
         return super().modify_tensors(data_torch, name, bid)
+
 
 @Model.register("Glm4MoeForCausalLM")
 class Glm4MoeModel(Model):
@@ -4460,6 +4538,103 @@ class ChatGLMModel(Model):
 
         name = name.removeprefix("transformer.")
         return [(self.map_tensor_name(name), data_torch)]
+
+@Model.register("BailingMoeV2ForCausalLM")
+class BailingMoeV2Model(Model):
+    model_arch = gguf.MODEL_ARCH.BAILINGMOE2
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if nextn_layers := self.hparams.get("num_nextn_predict_layers", 0):
+            self.block_count = self.hparams["num_hidden_layers"] + nextn_layers
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        if (rope_dim := hparams.get("head_dim")) is None:
+            rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+
+        self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.hparams.get("partial_rotary_factor", 0.5)))
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+        else:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+        self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
+        self.gguf_writer.add_expert_shared_feed_forward_length(hparams.get("moe_shared_expert_intermediate_size", hparams["moe_intermediate_size"] * hparams["num_shared_experts"]))
+        self.gguf_writer.add_expert_weights_scale(hparams["routed_scaling_factor"])
+        self.gguf_writer.add_expert_count(hparams["num_experts"])
+        self.gguf_writer.add_expert_shared_count(hparams["num_shared_experts"])
+        self.gguf_writer.add_expert_group_count(hparams["n_group"])
+        self.gguf_writer.add_expert_group_used_count(hparams["topk_group"])
+        self.gguf_writer.add_expert_weights_norm(hparams["norm_topk_prob"])
+
+        if hparams["score_function"] == "sigmoid":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        elif hparams["score_function"] == "softmax":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
+        else:
+            raise ValueError(f"Unsupported score_function value: {hparams['score_function']}")
+
+        if (nextn_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
+            self.gguf_writer.add_nextn_predict_layers(nextn_layers)
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if "mlp.experts" in name:
+            n_experts = self.hparams["num_experts"]
+            assert bid is not None
+
+            tensors: list[tuple[str, Tensor]] = []
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                # merge the experts into a single 3d tensor
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+
+                    new_name = self.map_tensor_name(merged_name)
+
+                    tensors.append((new_name, data_torch))
+
+            return tensors
+
+        if name.endswith(".expert_bias"):
+            name = name.replace(".expert_bias", ".expert_bias.bias")
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._experts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
 
 ###### CONVERSION LOGIC ######
 

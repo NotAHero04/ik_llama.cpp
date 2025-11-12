@@ -26,6 +26,8 @@ enum llm_arch {
     LLM_ARCH_QWEN2VL,
     LLM_ARCH_QWEN3,
     LLM_ARCH_QWEN3MOE,
+    LLM_ARCH_QWEN3VL,
+    LLM_ARCH_QWEN3VLMOE,
     LLM_ARCH_PHI2,
     LLM_ARCH_PHI3,
     LLM_ARCH_PLAMO,
@@ -62,6 +64,9 @@ enum llm_arch {
     LLM_ARCH_ERNIE4_5_MOE,
     LLM_ARCH_HUNYUAN_MOE,
     LLM_ARCH_OPENAI_MOE,
+    LLM_ARCH_BAILINGMOE2,
+    LLM_ARCH_MINIMAX_M2,
+    LLM_ARCH_SMOLLM3,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -92,10 +97,13 @@ enum llm_kv {
     LLM_KV_EXPERT_COUNT,
     LLM_KV_EXPERT_USED_COUNT,
     LLM_KV_EXPERT_SHARED_COUNT,
+    LLM_KV_EXPERT_GROUP_COUNT,
+    LLM_KV_EXPERT_GROUP_USED_COUNT,
     LLM_KV_EXPERT_WEIGHTS_SCALE,
     LLM_KV_EXPERT_WEIGHTS_NORM,
     LLM_KV_EXPERT_GATING_FUNC,
     LLM_KV_NEXTN_PREDICT_LAYERS,
+    LLM_KV_NUM_DEEPSTACK_LAYERS,
     LLM_KV_POOLING_TYPE,
     LLM_KV_LOGIT_SCALE,
     LLM_KV_DECODER_START_TOKEN_ID,
@@ -298,3 +306,5 @@ enum llm_tensor {
 };
 
 llm_arch llm_arch_from_string(const std::string & name);
+
+const char * llama_model_arch_name(llm_arch arch);

@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
+#include <map>
 
 enum llama_fver {
     GGUF_FILE_VERSION_V1 = 1,
@@ -29,6 +30,8 @@ static const char * llama_file_version_name(llama_fver version) {
 
 using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
 
+struct llama_layer;
+
 struct llama_model_loader {
     int n_kv      = 0;
     int n_tensors = 0;
@@ -41,6 +44,7 @@ struct llama_model_loader {
     bool check_tensors;
     bool repack_tensors = false;
     bool use_thp = false;
+    bool merge_qkv = false;
 
     llama_files files;
     llama_ftype ftype;
@@ -75,7 +79,7 @@ struct llama_model_loader {
     std::string arch_name;
     LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
 
-    llama_model_loader(const std::string & fname, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp,
+    llama_model_loader(const std::string & fname, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp, bool merge_qkv,
             const llama_model_kv_override * param_overrides_p,
             const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
 
@@ -166,4 +170,17 @@ struct llama_model_loader {
             llama_mlocks * lmlocks,
             llama_progress_callback progress_callback,
             void * progress_callback_user_data);
+};
+
+void llm_load_arch(llama_model_loader & ml, llama_model & model);
+
+void llm_load_hparams(llama_model_loader & ml, llama_model & model);
+
+struct create_tensors_helper_interface {
+    virtual ~create_tensors_helper_interface() = default;
+    virtual bool create_tensors() = 0;
+    virtual std::map<ggml_backend_buffer_type_t, ggml_context *> & get_ctx_map() = 0;
+    virtual size_t get_ctx_size() const = 0;
+
+    static std::unique_ptr<create_tensors_helper_interface> instance(llama_model_loader & ml, llama_model & model);
 };

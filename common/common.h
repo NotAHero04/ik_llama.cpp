@@ -53,6 +53,8 @@ struct llama_lora_adapter_container : llama_lora_adapter_info {
     struct llama_lora_adapter * adapter;
 };
 
+using llama_tokens = std::vector<llama_token>;
+
 // build info
 extern int LLAMA_BUILD_NUMBER;
 extern char const * LLAMA_COMMIT;
@@ -109,6 +111,14 @@ enum common_reasoning_format {
     COMMON_REASONING_FORMAT_DEEPSEEK,        // Extract thinking tag contents and return as `message.reasoning_content`, including in streaming deltas.
 };
 
+enum common_webui {
+    COMMON_WEBUI_NONE,
+    COMMON_WEBUI_AUTO,
+    COMMON_WEBUI_LLAMACPP,
+};
+
+common_webui common_webui_from_name(const std::string& format);
+
 struct model_paths {
     std::string path        = ""; // model local path                                       // NOLINT
     std::string url         = ""; // model url to download                                  // NOLINT
@@ -118,6 +128,10 @@ struct model_paths {
 };
 
 struct gpt_params {
+    std::string devices;
+    std::string devices_draft;
+    std::string draft_params;
+
     uint32_t seed                 = LLAMA_DEFAULT_SEED; // RNG seed
 
     int32_t n_threads             = cpu_get_num_math();
@@ -185,6 +199,8 @@ struct gpt_params {
     std::string logits_file          = ""; // file for saving *all* logits
     std::string rpc_servers          = ""; // comma separated list of RPC servers
 
+    std::string cuda_params          = ""; // comma separated list of cuda parameters key=value1,key2=value2
+
     std::vector<std::string> in_files;   // all input files
     std::vector<std::string> antiprompt; // strings upon which more user input is prompted (a.k.a. reverse prompts)
     std::vector<llama_model_kv_override> kv_overrides;
@@ -225,16 +241,19 @@ struct gpt_params {
     bool conversation      = false; // conversation mode (does not print special tokens and suffix/prefix)
     bool prompt_cache_all  = false; // save user input and generations to prompt cache
     bool prompt_cache_ro   = false; // open the prompt cache read-only and do not update it
-
+    bool ctx_shift         = true;
     bool escape            = true;  // escape "\n", "\r", "\t", "\'", "\"", and "\\"
     bool multiline_input   = false; // reverse the usage of `\`
     bool simple_io         = false; // improves compatibility with subprocesses and limited consoles
     bool cont_batching     = true;  // insert new sequences for decoding on-the-fly
-    bool flash_attn        = false; // flash attention
-    int  mla_attn          = 0;     // MLA 0: standard attention, 1: MLA with K and transposed V cache, 2: MLA with just K cache
+    bool flash_attn        = true;  // flash attention
+    int  mla_attn          = 3;     // MLA 0: standard, 1: MLA with K and V^T cache, 2: MLA with just K cache, 3: the best of both worlds
     int  attn_max_batch    = 0;     // Max batch size to use when computing attention (only applicable if flash_attn = false)
-    bool fused_moe_up_gate = false; // fused up*unary(gate) op for MoE models
+    bool fused_moe_up_gate = true;  // fused up*unary(gate) op for MoE models
     bool fused_up_gate     = true;  // fused up*unary(gate) op
+    bool fused_mmad        = true;  // fused mul+multi_add op
+    bool grouped_expert_routing = false; // if to use grouped expert routing (BailingMoeV2 arch)
+    bool rope_cache        = false; // if to use RoPE cache (for supported models)
     int  min_experts       = -1;
     float thresh_experts   = 0;
 
@@ -254,7 +273,8 @@ struct gpt_params {
     bool repack_tensors    = false; // repack tensors if interleaved variant is available
     bool use_thp           = false; // use transparent huge pages (linux only)
     bool validate_quants   = false; // if true, check for NaNs while loading the model
-    bool only_active_exps  = false; // if true, offload only active experts (relevant only for hybrid CPU/GPU)
+    bool only_active_exps  = true;  // if true, offload only active experts (relevant only for hybrid CPU/GPU)
+    bool merge_qkv         = false; // if true, merge separate Q, K, V tensors into a single, contiguous tensor
 
     std::string cache_type_k = "f16"; // KV cache data type for the K
     std::string cache_type_v = "f16"; // KV cache data type for the V
@@ -286,7 +306,7 @@ struct gpt_params {
     bool use_jinja = false;                                                                                 // NOLINT
     std::string system_prompt = "";
     bool enable_chat_template = true;
-    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     int reasoning_budget = -1;
     bool prefill_assistant = true;
 
@@ -298,8 +318,8 @@ struct gpt_params {
     std::map<std::string, std::string> default_template_kwargs;
 
     // "advanced" endpoints are disabled by default for better security
-    bool webui            = true;
-    bool endpoint_slots   = false;
+    common_webui webui = COMMON_WEBUI_AUTO;
+    bool endpoint_slots   = true;
     bool endpoint_props   = false; // only control POST requests, not GET
     bool endpoint_metrics = false;
 
@@ -355,7 +375,12 @@ struct gpt_params {
     bool sweep_bench_output_jsonl = false;
 };
 
+
+std::pair<int, char**> parse_command_line(const std::string& commandLine);
+void free_command_line(int argc, char** argv);
+
 void gpt_params_handle_hf_token(gpt_params & params);
+void gpt_params_parse_from_env(gpt_params & params);
 void gpt_params_handle_model_default(gpt_params & params);
 
 bool gpt_params_parse_ex   (int argc, char ** argv, gpt_params & params);
@@ -364,6 +389,15 @@ bool gpt_params_find_arg   (int argc, char ** argv, const std::string & arg, gpt
 void gpt_params_print_usage(int argc, char ** argv, const gpt_params & params);
 
 std::string gpt_params_get_system_info(const gpt_params & params);
+
+
+struct common_remote_params {
+    std::vector<std::string> headers;
+    long timeout = 0; // CURLOPT_TIMEOUT, in seconds ; 0 means no timeout
+    long max_size = 0; // max size of the response ; unlimited if 0 ; max is 2GB
+};
+// get remote file content, returns <http_code, raw_response_body>
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string& url, const common_remote_params& params);
 
 //
 // String utils
@@ -430,6 +464,7 @@ bool fs_create_directory_with_parents(const std::string & path);
 std::string fs_get_cache_directory();
 std::string fs_get_cache_file(const std::string & filename);
 
+
 //
 // Model utils
 //
@@ -480,6 +515,12 @@ std::vector<llama_token> llama_tokenize(
                         bool   add_special,
                         bool   parse_special = false);
 
+std::vector<llama_token> llama_tokenize(
+    const struct llama_vocab* vocab,
+    const std::string& text,
+    bool   add_special,
+    bool   parse_special = false);
+
 // tokenizes a token into a piece, optionally renders special/control tokens
 // should work similar to Python's `tokenizer.id_to_piece`
 std::string llama_token_to_piece(
@@ -496,70 +537,16 @@ std::string llama_token_to_piece(
 // should work similar to Python's `tokenizer.decode`
 // optionally renders special/control tokens
 std::string llama_detokenize(
-                         llama_context * ctx,
+        const llama_context * ctx,
         const std::vector<llama_token> & tokens,
                                   bool   special = true);
+
 
 // Uses the value from the model metadata if possible, otherwise
 // defaults to true when model type is SPM, otherwise false.
 bool llama_should_add_bos_token(const llama_model * model);
 
-//
-// Chat template utils
-//
-//struct common_tool_call {
-//    std::string name;
-//    std::string arguments;
-//    std::string id;
-//};
-//
-//// same with llama_chat_message, but uses std::string
-//struct common_chat_msg {
-//    std::string role;
-//    std::string content;
-//    std::vector<common_tool_call> tool_calls;
-//    std::string reasoning_content = "";
-//};
 
-//// Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
-//bool llama_chat_verify_template(const struct llama_model* , const std::string& tmpl, bool use_jinja);
-//
-//namespace minja {
-//    class chat_template;
-//}
-//
-//typedef minja::chat_template common_chat_template;
-//
-//struct common_chat_templates {
-//    bool has_explicit_template; // Model had builtin template or template overridde was specified.
-//    std::unique_ptr<common_chat_template> template_default; // always set (defaults to chatml)
-//    std::unique_ptr<common_chat_template> template_tool_use;
-//};
-//
-//
-//// CPP wrapper for llama_chat_apply_template
-//// If the built-in template is not supported, we default to chatml
-//// If the custom "tmpl" is not supported, we throw an error
-//std::string llama_chat_apply_template(
-//    const struct llama_model* model,
-//    const common_chat_template& tmpl,
-//    const std::vector< common_chat_msg>& chat,
-//    bool add_ass,
-//    bool use_jinja);
-//
-//// Format single message, while taking into account the position of that message in chat history
-//std::string  llama_chat_format_single(const struct llama_model* model,
-//    const common_chat_template& tmpl,
-//    const std::vector< common_chat_msg>& past_msg,
-//    const  common_chat_msg& new_msg,
-//    bool add_ass,
-//    bool use_jinja);
-//
-//// Returns an example of formatted chat
-//std::string  llama_chat_format_example(const struct llama_model* model,
-//    const common_chat_template& tmpl, bool use_jinja);
-//
-//common_chat_templates  llama_chat_templates_from_model(const struct llama_model* model, const std::string& chat_template_override);
 
 
 //
